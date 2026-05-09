@@ -137,6 +137,14 @@ class PPO:
 
         self.agents = env.possible_agents
         self.shared = config['algorithm']['shared_policy']
+        self.gamma = config['training']['gamma']
+        self.gae_lambda = config['training']['gae_lambda']
+        self.ppo_epochs = config['training']['ppo_epochs']
+        self.mini_batch_size = config['training']['mini_batch_size']
+        self.clip_range = config['training']['clip_range']
+        self.value_loss_coef = config['training']['value_loss_coef']
+        self.entropy_coef = config['training']['entropy_coef']
+        self.max_grad_norm = config['training']['max_grad_norm']
 
         obs_space = env.observation_space(self.agents[0])
         act_space = env.action_space(self.agents[0])
@@ -205,107 +213,186 @@ class PPO:
         values,
         next_value
     ):
-        advantages = []
+        agents = rewards[0].keys()
 
-        gae = 0
+        # initialize per-agent storage
+        returns_dict = {a: [] for a in agents}
+        advantages_dict = {a: [] for a in agents}
 
+        gae = {a: 0 for a in agents}
+
+        # append next value per agent
         values = values + [next_value]
 
-        for step in reversed(range(len(rewards))):
-            delta = (
-                rewards[step]
-                + self.gamma * values[step + 1] * (1 - dones[step])
-                - values[step]
-            )
+        for t in reversed(range(len(rewards))):
+            for a in agents:
 
-            gae = (
-                delta
-                + self.gamma
-                * self.gae_lambda
-                * (1 - dones[step])
-                * gae
-            )
+                reward = rewards[t][a]
+                done = dones[t][a]
+                value = values[t][a]
+                next_v = values[t + 1][a]
 
-            advantages.insert(0, gae)
+                mask = 1.0 - float(done)
 
-        returns = [a + v for a, v in zip(advantages, values[:-1])]
+                delta = reward + self.gamma * next_v * mask - value
 
-        return returns, advantages
+                gae[a] = delta + self.gamma * self.gae_lambda * mask * gae[a]
+
+                advantages_dict[a].insert(0, gae[a])
+                returns_dict[a].insert(0, gae[a] + value)
+
+        return returns_dict, advantages_dict
 
     # ======================================================
     # PPO Update
     # ======================================================
 
     def update(self):
-        obs = torch.FloatTensor(np.array(self.buffer.obs)).to(self.device)
-        actions = torch.LongTensor(np.array(self.buffer.actions)).to(self.device)
-        old_log_probs = torch.FloatTensor(
-            np.array(self.buffer.log_probs)
-        ).to(self.device)
+        if self.shared:
+            agents = self.agents
 
-        returns = torch.FloatTensor(np.array(self.buffer.returns)).to(self.device)
-        advantages = torch.FloatTensor(
-            np.array(self.buffer.advantages)
-        ).to(self.device)
+            obs = []
+            actions = []
+            old_log_probs = []
+            returns = []
+            advantages = []
 
-        advantages = (
-            (advantages - advantages.mean())
-            / (advantages.std() + 1e-8)
-        )
+            # flatten all agents into one dataset
+            for t in range(len(self.buffer.obs)):
+                for a in agents:
+                    obs.append(self.buffer.obs[t][a])
+                    actions.append(self.buffer.actions[t][a])
+                    old_log_probs.append(self.buffer.log_probs[t][a])
+                    returns.append(self.buffer.returns[a][t])
+                    advantages.append(self.buffer.advantages[a][t])
 
-        dataset_size = obs.shape[0]
+            obs = torch.FloatTensor(np.array(obs)).to(self.device)
+            actions = torch.LongTensor(np.array(actions)).to(self.device)
+            old_log_probs = torch.FloatTensor(np.array(old_log_probs)).to(self.device)
+            returns = torch.FloatTensor(np.array(returns)).to(self.device)
+            advantages = torch.FloatTensor(np.array(advantages)).to(self.device)
 
-        for _ in range(self.ppo_epochs):
-            indices = np.random.permutation(dataset_size)
+            # normalize advantages
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
-            for start in range(0, dataset_size, self.mini_batch_size):
-                end = start + self.mini_batch_size
-                mb_idx = indices[start:end]
+            dataset_size = obs.shape[0]
 
-                mb_obs = obs[mb_idx]
-                mb_actions = actions[mb_idx]
-                mb_old_log_probs = old_log_probs[mb_idx]
-                mb_returns = returns[mb_idx]
-                mb_advantages = advantages[mb_idx]
+            for _ in range(self.ppo_epochs):
+                indices = np.random.permutation(dataset_size)
 
-                new_log_probs, entropy, values = \
-                    self.policy.evaluate_actions(
-                        mb_obs,
-                        mb_actions
+                for start in range(0, dataset_size, self.mini_batch_size):
+                    end = start + self.mini_batch_size
+                    mb_idx = indices[start:end]
+
+                    mb_obs = obs[mb_idx]
+                    mb_actions = actions[mb_idx]
+                    mb_old_log_probs = old_log_probs[mb_idx]
+                    mb_returns = returns[mb_idx]
+                    mb_advantages = advantages[mb_idx]
+
+                    new_log_probs, entropy, values = \
+                        self.policy.evaluate_actions(mb_obs, mb_actions)
+
+                    ratio = torch.exp(new_log_probs - mb_old_log_probs)
+
+                    surr1 = ratio * mb_advantages
+                    surr2 = torch.clamp(
+                        ratio,
+                        1.0 - self.clip_range,
+                        1.0 + self.clip_range
+                    ) * mb_advantages
+
+                    policy_loss = -torch.min(surr1, surr2).mean()
+                    value_loss = (mb_returns - values).pow(2).mean()
+                    entropy_loss = entropy.mean()
+
+                    loss = (
+                        policy_loss
+                        + self.value_loss_coef * value_loss
+                        - self.entropy_coef * entropy_loss
                     )
 
-                ratio = torch.exp(new_log_probs - mb_old_log_probs)
+                    self.optimizer.zero_grad()
+                    loss.backward()
 
-                surr1 = ratio * mb_advantages
-                surr2 = torch.clamp(
-                    ratio,
-                    1.0 - self.clip_range,
-                    1.0 + self.clip_range
-                ) * mb_advantages
+                    nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
 
-                policy_loss = -torch.min(surr1, surr2).mean()
+                    self.optimizer.step()
 
-                value_loss = (mb_returns - values).pow(2).mean()
+            self.buffer.clear()
+        else:
+            for a in self.agents:
 
-                entropy_loss = entropy.mean()
+                obs = torch.FloatTensor(
+                    np.array([t[a] for t in self.buffer.obs])
+                ).to(self.device)
 
-                loss = (
-                    policy_loss
-                    + self.value_loss_coef * value_loss
-                    - self.entropy_coef * entropy_loss
-                )
+                actions = torch.LongTensor(
+                    np.array([t[a] for t in self.buffer.actions])
+                ).to(self.device)
 
-                self.optimizer.zero_grad()
-                loss.backward()
+                old_log_probs = torch.FloatTensor(
+                    np.array([t[a] for t in self.buffer.log_probs])
+                ).to(self.device)
 
-                nn.utils.clip_grad_norm_(
-                    self.policy.parameters(),
-                    self.max_grad_norm
-                )
+                returns = torch.FloatTensor(
+                    np.array(self.buffer.returns[a])
+                ).to(self.device)
 
-                self.optimizer.step()
+                advantages = torch.FloatTensor(
+                    np.array(self.buffer.advantages[a])
+                ).to(self.device)
 
-        self.buffer.clear()
+                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+                policy = self.policies[a]
+                optimizer = self.optimizers[a]
+
+                dataset_size = obs.shape[0]
+
+                for _ in range(self.ppo_epochs):
+                    indices = np.random.permutation(dataset_size)
+
+                    for start in range(0, dataset_size, self.mini_batch_size):
+                        end = start + self.mini_batch_size
+                        mb_idx = indices[start:end]
+
+                        mb_obs = obs[mb_idx]
+                        mb_actions = actions[mb_idx]
+                        mb_old_log_probs = old_log_probs[mb_idx]
+                        mb_returns = returns[mb_idx]
+                        mb_advantages = advantages[mb_idx]
+
+                        new_log_probs, entropy, values = \
+                            policy.evaluate_actions(mb_obs, mb_actions)
+
+                        ratio = torch.exp(new_log_probs - mb_old_log_probs)
+
+                        surr1 = ratio * mb_advantages
+                        surr2 = torch.clamp(
+                            ratio,
+                            1.0 - self.clip_range,
+                            1.0 + self.clip_range
+                        ) * mb_advantages
+
+                        policy_loss = -torch.min(surr1, surr2).mean()
+                        value_loss = (mb_returns - values).pow(2).mean()
+                        entropy_loss = entropy.mean()
+
+                        loss = (
+                            policy_loss
+                            + self.value_loss_coef * value_loss
+                            - self.entropy_coef * entropy_loss
+                        )
+
+                        optimizer.zero_grad()
+                        loss.backward()
+
+                        nn.utils.clip_grad_norm_(policy.parameters(), self.max_grad_norm)
+
+                        optimizer.step()
+
+            self.buffer.clear()
 
     # ======================================================
     # Training Loop
@@ -328,6 +415,7 @@ class PPO:
             while not done:
                 actions, log_probs, values = \
                     self.select_actions(observations)
+                #print(f'Actions: {actions}')
 
                 next_obs, rewards, terminations, truncations, infos = \
                     self.env.step(actions)
@@ -342,25 +430,29 @@ class PPO:
 
                 done = all(done_dict.values())
 
-                for agent in self.agents:
-                    self.buffer.obs.append(observations[agent])
-                    self.buffer.actions.append(actions[agent])
-                    self.buffer.log_probs.append(
-                        log_probs[agent].detach().cpu().numpy()
-                    )
-                    self.buffer.rewards.append(rewards[agent])
-                    self.buffer.dones.append(done_dict[agent])
-                    self.buffer.values.append(
-                        values[agent].detach().cpu().numpy().item()
-                    )
+                self.buffer.obs.append(observations)
+                self.buffer.actions.append(actions)
+                self.buffer.log_probs.append({
+                    a: log_probs[a].detach().cpu().item()
+                    for a in self.agents
+                })
+                self.buffer.rewards.append(rewards)
+                self.buffer.dones.append(done_dict)
+                self.buffer.values.append({
+                    a: values[a].detach().cpu().item()
+                    for a in self.agents
+                })
 
-                    episode_reward += rewards[agent]
+                episode_reward += np.mean(list(rewards.values()))
 
                 observations = next_obs
 
                 timestep += 1
 
-            next_value = 0
+            next_value = {a: 0.0 for a in self.agents}
+
+            #print(self.buffer.rewards)
+            #print(self.buffer.values)
 
             returns, advantages = \
                 self.compute_returns_and_advantages(
@@ -369,6 +461,9 @@ class PPO:
                     self.buffer.values,
                     next_value
                 )
+            
+            #print(f'Returns: {len(returns["first_0"])}')
+            #print(f'Advantages: {len(advantages["first_0"])}')
 
             self.buffer.returns = returns
             self.buffer.advantages = advantages

@@ -96,7 +96,6 @@ def make_env(config):
     # Build Environment
     # ======================================================
     print(env_name)
-    print(env_map)
     if env_name not in env_map:
         raise ValueError(
             f'Unknown environment: {env_name}'
