@@ -404,7 +404,6 @@ class PPO:
         timestep = 0
 
         while timestep < total_timesteps:
-            print(f'[PPO] Starting rollout at timestep {timestep}')
             observations, infos = self.env.reset()
 
             done = False
