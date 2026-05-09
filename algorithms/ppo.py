@@ -364,7 +364,7 @@ class PPO:
                         mb_advantages = advantages[mb_idx]
 
                         new_log_probs, entropy, values = \
-                            policy.evaluate_actions(mb_obs, mb_actions)
+                            policy.evaluate(mb_obs, mb_actions)
 
                         ratio = torch.exp(new_log_probs - mb_old_log_probs)
 
@@ -404,6 +404,7 @@ class PPO:
         timestep = 0
 
         while timestep < total_timesteps:
+            print(f'[PPO] Starting rollout at timestep {timestep}')
             observations, infos = self.env.reset()
 
             done = False
