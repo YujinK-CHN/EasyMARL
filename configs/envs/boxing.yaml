@@ -1,0 +1,16 @@
+# ==========================================================
+# Boxing (PettingZoo)
+# ==========================================================
+
+env:
+  family: "atari"
+  name: "boxing_v2"
+  seed: 42
+
+  parallel: True
+
+  # PettingZoo environment constructor arguments
+  kwargs:
+    obs_type: "rgb_image"   # alternatives: "ram"
+    render_mode: null       # "human" or "rgb_array" if needed
+    max_cycles: 1000

@@ -6,21 +6,6 @@ from utils import make_env
 
 
 # ==========================================================
-# Callback
-# ==========================================================
-
-def callback(results):
-    """
-    Example callback function.
-    """
-
-    print('[Callback] Results received')
-
-    # Example:
-    # savemat('results.mat', results)
-
-
-# ==========================================================
 # Config Loader
 # ==========================================================
 
@@ -52,7 +37,7 @@ def main():
     parser.add_argument(
         '--env',
         type=str,
-        default='simple_spread'
+        default='boxing'
     )
 
     args = parser.parse_args()
@@ -115,14 +100,7 @@ def main():
         # Train
         # --------------------------------------------------
 
-        results = agent.train()
-
-        # --------------------------------------------------
-        # Callback
-        # --------------------------------------------------
-
-        if callback:
-            callback(results)
+        agent.train()
 
         # --------------------------------------------------
         # Close Environment

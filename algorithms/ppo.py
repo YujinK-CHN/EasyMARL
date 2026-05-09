@@ -3,6 +3,19 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.distributions import Categorical
+from collections import defaultdict
+
+class RolloutBuffer:
+    def __init__(self):
+        self.obs = []
+        self.actions = []
+        self.log_probs = []
+        self.rewards = []
+        self.dones = []
+        self.values = []
+
+    def clear(self):
+        self.__init__()
 
 # ==========================================================
 # Encoders
@@ -32,21 +45,28 @@ class CNNEncoder(nn.Module):
     def __init__(self, input_shape, activation='relu'):
         super().__init__()
 
-        c, h, w = input_shape
+        # input_shape is expected as (H, W, C) from PettingZoo
+        h, w, c = input_shape
+        #print(f'Input shape (HWC): {input_shape}')
 
         self.cnn = nn.Sequential(
-            nn.Conv2d(c, 32, 8, stride=4),
+            nn.Conv2d(c, 32, kernel_size=8, stride=4),
             nn.ReLU(),
-            nn.Conv2d(32, 64, 4, stride=2),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2),
             nn.ReLU(),
-            nn.Conv2d(64, 64, 3, stride=1),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1),
             nn.ReLU(),
             nn.Flatten()
         )
 
         with torch.no_grad():
-            dummy = torch.zeros(1, c, h, w)
+            # FIX: convert HWC → CHW
+            dummy = torch.zeros(1, h, w, c).permute(0, 3, 1, 2)
+
+            #print(f'Dummy input shape (CHW): {dummy.shape}')
+
             n_flat = self.cnn(dummy).shape[1]
+            # print(f'CNN output shape: {n_flat}')
 
         self.fc = nn.Sequential(
             nn.Linear(n_flat, 256),
@@ -60,7 +80,7 @@ class CNNEncoder(nn.Module):
             x = x.permute(0, 3, 1, 2)  # NHWC -> NCHW
         elif x.ndim == 4:
             x = x.permute(0, 3, 1, 2)
-
+        #print(f'CNN input shape: {x.shape}')
         x = self.cnn(x)
         return self.fc(x)
 
@@ -113,6 +133,7 @@ class PPO:
         self.config = config
         self.env = env
         self.device = self._device()
+        self.buffer = RolloutBuffer()
 
         self.agents = env.possible_agents
         self.shared = config['algorithm']['shared_policy']
@@ -172,6 +193,44 @@ class PPO:
             values[a] = val
 
         return actions, logps, values
+
+    # ======================================================
+    # GAE Computation
+    # ======================================================
+
+    def compute_returns_and_advantages(
+        self,
+        rewards,
+        dones,
+        values,
+        next_value
+    ):
+        advantages = []
+
+        gae = 0
+
+        values = values + [next_value]
+
+        for step in reversed(range(len(rewards))):
+            delta = (
+                rewards[step]
+                + self.gamma * values[step + 1] * (1 - dones[step])
+                - values[step]
+            )
+
+            gae = (
+                delta
+                + self.gamma
+                * self.gae_lambda
+                * (1 - dones[step])
+                * gae
+            )
+
+            advantages.insert(0, gae)
+
+        returns = [a + v for a, v in zip(advantages, values[:-1])]
+
+        return returns, advantages
 
     # ======================================================
     # PPO Update
@@ -287,12 +346,12 @@ class PPO:
                     self.buffer.obs.append(observations[agent])
                     self.buffer.actions.append(actions[agent])
                     self.buffer.log_probs.append(
-                        log_probs[agent].cpu().numpy()
+                        log_probs[agent].detach().cpu().numpy()
                     )
                     self.buffer.rewards.append(rewards[agent])
                     self.buffer.dones.append(done_dict[agent])
                     self.buffer.values.append(
-                        values[agent].cpu().numpy().item()
+                        values[agent].detach().cpu().numpy().item()
                     )
 
                     episode_reward += rewards[agent]
