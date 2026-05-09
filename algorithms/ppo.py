@@ -4,225 +4,174 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.distributions import Categorical
 
-
 # ==========================================================
-# Utility Functions
-# ==========================================================
-
-
-def build_mlp(input_dim, hidden_sizes, output_dim, activation='relu'):
-    activations = {
-        'relu': nn.ReLU,
-        'tanh': nn.Tanh,
-        'elu': nn.ELU,
-    }
-
-    act_fn = activations[activation]
-
-    layers = []
-    prev_dim = input_dim
-
-    for h in hidden_sizes:
-        layers.append(nn.Linear(prev_dim, h))
-        layers.append(act_fn())
-        prev_dim = h
-
-    layers.append(nn.Linear(prev_dim, output_dim))
-
-    return nn.Sequential(*layers)
-
-
-# ==========================================================
-# Actor-Critic Network
+# Encoders
 # ==========================================================
 
-
-class ActorCritic(nn.Module):
-    def __init__(
-        self,
-        obs_dim,
-        action_dim,
-        actor_hidden_sizes,
-        critic_hidden_sizes,
-        activation='relu'
-    ):
+class MLPEncoder(nn.Module):
+    def __init__(self, input_dim, hidden_sizes=[128, 128], activation='relu'):
         super().__init__()
 
-        self.actor = build_mlp(
-            obs_dim,
-            actor_hidden_sizes,
-            action_dim,
-            activation
+        act = nn.ReLU if activation == 'relu' else nn.Tanh
+
+        layers = []
+        prev = input_dim
+
+        for h in hidden_sizes:
+            layers += [nn.Linear(prev, h), act()]
+            prev = h
+
+        self.net = nn.Sequential(*layers)
+        self.out_dim = prev
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class CNNEncoder(nn.Module):
+    def __init__(self, input_shape, activation='relu'):
+        super().__init__()
+
+        c, h, w = input_shape
+
+        self.cnn = nn.Sequential(
+            nn.Conv2d(c, 32, 8, stride=4),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, 4, stride=2),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, 3, stride=1),
+            nn.ReLU(),
+            nn.Flatten()
         )
 
-        self.critic = build_mlp(
-            obs_dim,
-            critic_hidden_sizes,
-            1,
-            activation
+        with torch.no_grad():
+            dummy = torch.zeros(1, c, h, w)
+            n_flat = self.cnn(dummy).shape[1]
+
+        self.fc = nn.Sequential(
+            nn.Linear(n_flat, 256),
+            nn.ReLU()
+        )
+
+        self.out_dim = 256
+
+    def forward(self, x):
+        if x.ndim == 3:
+            x = x.permute(0, 3, 1, 2)  # NHWC -> NCHW
+        elif x.ndim == 4:
+            x = x.permute(0, 3, 1, 2)
+
+        x = self.cnn(x)
+        return self.fc(x)
+
+# ==========================================================
+# Actor-Critic
+# ==========================================================
+
+class ActorCritic(nn.Module):
+    def __init__(self, obs_dim, act_dim, encoder):
+        super().__init__()
+
+        self.encoder = encoder
+
+        self.actor = nn.Sequential(
+            nn.Linear(encoder.out_dim, 256),
+            nn.ReLU(),
+            nn.Linear(256, act_dim)
+        )
+
+        self.critic = nn.Sequential(
+            nn.Linear(encoder.out_dim, 256),
+            nn.ReLU(),
+            nn.Linear(256, 1)
         )
 
     def forward(self, obs):
-        logits = self.actor(obs)
-        value = self.critic(obs)
-        return logits, value
+        z = self.encoder(obs)
+        return self.actor(z), self.critic(z)
 
     def act(self, obs):
         logits, value = self.forward(obs)
-
         dist = Categorical(logits=logits)
-
         action = dist.sample()
         log_prob = dist.log_prob(action)
-
         return action, log_prob, value
 
-    def evaluate_actions(self, obs, actions):
-        logits, values = self.forward(obs)
-
+    def evaluate(self, obs, actions):
+        logits, value = self.forward(obs)
         dist = Categorical(logits=logits)
-
         log_probs = dist.log_prob(actions)
         entropy = dist.entropy()
-
-        return log_probs, entropy, values.squeeze(-1)
-
+        return log_probs, entropy, value.squeeze(-1)
 
 # ==========================================================
-# Rollout Buffer
+# PPO
 # ==========================================================
-
-
-class RolloutBuffer:
-    def __init__(self):
-        self.clear()
-
-    def clear(self):
-        self.obs = []
-        self.actions = []
-        self.log_probs = []
-        self.rewards = []
-        self.dones = []
-        self.values = []
-
-
-# ==========================================================
-# PPO Agent
-# ==========================================================
-
 
 class PPO:
     def __init__(self, config, env):
         self.config = config
         self.env = env
-
-        self.device = self._build_device()
-
-        self.gamma = config['training']['gamma']
-        self.gae_lambda = config['training']['gae_lambda']
-        self.clip_range = config['training']['clip_range']
-        self.ppo_epochs = config['training']['ppo_epochs']
-        self.batch_size = config['training']['batch_size']
-        self.mini_batch_size = config['training']['mini_batch_size']
-        self.entropy_coef = config['training']['entropy_coef']
-        self.value_loss_coef = config['training']['value_loss_coef']
-        self.max_grad_norm = config['training']['max_grad_norm']
-
-        self.shared_policy = config['algorithm']['shared_policy']
+        self.device = self._device()
 
         self.agents = env.possible_agents
+        self.shared = config['algorithm']['shared_policy']
 
         obs_space = env.observation_space(self.agents[0])
         act_space = env.action_space(self.agents[0])
 
-        self.obs_dim = obs_space.shape[0]
-        self.action_dim = act_space.n
+        self.act_dim = act_space.n
 
-        self.policy = ActorCritic(
-            obs_dim=self.obs_dim,
-            action_dim=self.action_dim,
-            actor_hidden_sizes=config['model']['actor_hidden_sizes'],
-            critic_hidden_sizes=config['model']['critic_hidden_sizes'],
-            activation=config['model']['activation']
-        ).to(self.device)
+        obs_shape = obs_space.shape
 
-        self.optimizer = optim.Adam(
-            self.policy.parameters(),
-            lr=config['training']['learning_rate']
-        )
+        if len(obs_shape) == 1:
+            encoder = lambda: MLPEncoder(obs_shape[0])
+        else:
+            encoder = lambda: CNNEncoder(obs_shape)
 
-        self.buffer = RolloutBuffer()
+        self.policies = {}
+        self.optimizers = {}
 
-    # ======================================================
-    # Device
-    # ======================================================
+        lr = config['training']['learning_rate']
 
-    def _build_device(self):
-        use_cuda = self.config['device']['use_cuda']
+        if self.shared:
+            net = ActorCritic(obs_shape, self.act_dim, encoder()).to(self.device)
 
-        if use_cuda and torch.cuda.is_available():
-            gpu_id = self.config['device']['gpu_id']
-            return torch.device(f'cuda:{gpu_id}')
+            for a in self.agents:
+                self.policies[a] = net
 
-        return torch.device('cpu')
+            self.optimizer = optim.Adam(net.parameters(), lr=lr)
 
-    # ======================================================
-    # Action Selection
-    # ======================================================
+        else:
+            for a in self.agents:
+                net = ActorCritic(obs_shape, self.act_dim, encoder()).to(self.device)
+                self.policies[a] = net
+                self.optimizers[a] = optim.Adam(net.parameters(), lr=lr)
 
-    def select_actions(self, observations):
-        actions = {}
-        log_probs = {}
-        values = {}
+    # ------------------------------------------------------
 
-        for agent, obs in observations.items():
-            obs_tensor = torch.FloatTensor(obs).to(self.device)
+    def _device(self):
+        if self.config['device']['use_cuda'] and torch.cuda.is_available():
+            return torch.device(f"cuda:{self.config['device']['gpu_id']}")
+        return torch.device("cpu")
 
-            action, log_prob, value = self.policy.act(obs_tensor)
+    # ------------------------------------------------------
 
-            actions[agent] = action.item()
-            log_probs[agent] = log_prob.detach()
-            values[agent] = value.detach()
+    def select_actions(self, obs):
+        actions, logps, values = {}, {}, {}
 
-        return actions, log_probs, values
+        for a, o in obs.items():
+            o = torch.tensor(o, dtype=torch.float32, device=self.device).unsqueeze(0)
 
-    # ======================================================
-    # GAE Computation
-    # ======================================================
+            net = self.policies[a]
 
-    def compute_returns_and_advantages(
-        self,
-        rewards,
-        dones,
-        values,
-        next_value
-    ):
-        advantages = []
+            act, logp, val = net.act(o)
 
-        gae = 0
+            actions[a] = act.item()
+            logps[a] = logp
+            values[a] = val
 
-        values = values + [next_value]
-
-        for step in reversed(range(len(rewards))):
-            delta = (
-                rewards[step]
-                + self.gamma * values[step + 1] * (1 - dones[step])
-                - values[step]
-            )
-
-            gae = (
-                delta
-                + self.gamma
-                * self.gae_lambda
-                * (1 - dones[step])
-                * gae
-            )
-
-            advantages.insert(0, gae)
-
-        returns = [a + v for a, v in zip(advantages, values[:-1])]
-
-        return returns, advantages
+        return actions, logps, values
 
     # ======================================================
     # PPO Update

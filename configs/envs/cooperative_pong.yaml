@@ -2,15 +2,10 @@
 # Cooperative Pong (PettingZoo Atari)
 # ==========================================================
 
-project_name: "pettingzoo-baselines"
-experiment_name: "cooperative_pong"
-
-seed: 42
-repeat: 3
-
 env:
-  family: "atari"
+  family: "butterfly"
   name: "cooperative_pong_v6"
+  seed: 42
 
   # Use parallel API when available
   parallel: true

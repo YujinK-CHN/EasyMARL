@@ -78,15 +78,15 @@ def main():
     # ------------------------------------------------------
     # Experiment Loop
     # ------------------------------------------------------
-
-    for exp_id in range(config['repeat']):
+    repeat = 1
+    for exp_id in range(repeat):
 
         print(
             '[+] %s - %d/%d'
             % (
                 args.algo.upper(),
                 exp_id + 1,
-                config['repeat']
+                repeat
             )
         )
 
