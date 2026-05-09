@@ -19,7 +19,7 @@ training:
   gamma: 0.99
   gae_lambda: 0.95
 
-  learning_rate: 0.001
+  learning_rate: 0.0001
 
   batch_size: 1024
   mini_batch_size: 256
@@ -37,9 +37,8 @@ training:
 
 evaluation:
   enabled: true
-  eval_interval: 10000
+  eval_interval: 1000
   eval_episodes: 10
-  deterministic: true
 
 # ==========================================================
 # Logging

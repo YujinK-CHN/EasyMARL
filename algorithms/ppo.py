@@ -76,12 +76,18 @@ class CNNEncoder(nn.Module):
         self.out_dim = 256
 
     def forward(self, x):
+
+        # single observation
         if x.ndim == 3:
-            x = x.permute(0, 3, 1, 2)  # NHWC -> NCHW
-        elif x.ndim == 4:
-            x = x.permute(0, 3, 1, 2)
-        #print(f'CNN input shape: {x.shape}')
+            x = x.unsqueeze(0)
+
+        # NHWC -> NCHW
+        x = x.permute(0, 3, 1, 2)
+
+        x = x.float() / 255.0
+
         x = self.cnn(x)
+
         return self.fc(x)
 
 # ==========================================================
@@ -175,7 +181,13 @@ class ActorCritic(nn.Module):
         else:
             mean = actor_out
 
-            std = torch.exp(self.actor_log_std)
+            log_std = torch.clamp(
+                self.actor_log_std,
+                -20,
+                2
+            )
+
+            std = torch.exp(log_std)
             std = std.expand_as(mean)
 
             dist = Normal(mean, std)
@@ -189,7 +201,12 @@ class ActorCritic(nn.Module):
     def act(self, obs):
         dist, value = self.get_dist(obs)
 
-        action = dist.sample()
+        raw_action = dist.sample()
+
+        if self.action_space == 'continuous':
+            action = torch.tanh(raw_action)
+        else:
+            action = raw_action
 
         if self.action_space == 'discrete':
             log_prob = dist.log_prob(action)
@@ -240,6 +257,21 @@ class PPO:
         self.value_loss_coef = config['training']['value_loss_coef']
         self.entropy_coef = config['training']['entropy_coef']
         self.max_grad_norm = config['training']['max_grad_norm']
+
+        # ======================================================
+        # Evaluation
+        # ======================================================
+
+        self.eval_enabled = config['evaluation']['enabled']
+        self.eval_interval = config['evaluation']['eval_interval']
+        self.eval_episodes = config['evaluation']['eval_episodes']
+
+        # ======================================================
+        # Logging
+        # ======================================================
+
+        self.log_interval = config['logging']['log_interval']
+        self.save_model_interval = config['logging']['save_model_interval']
 
         obs_space = env.observation_space(self.agents[0])
         act_space = env.action_space(self.agents[0])
@@ -297,11 +329,26 @@ class PPO:
             actions, logps, values = {}, {}, {}
 
             for a, o in obs.items():
-                o = torch.tensor(o, dtype=torch.float32, device=self.device).unsqueeze(0)
+                o = (
+                    torch.tensor(
+                        o,
+                        dtype=torch.float32,
+                        device=self.device
+                    ) / 255.0
+                ).unsqueeze(0)
 
                 act, logp, val = self.policy.act(o)
 
-                actions[a] = act.item()
+                if self.policy.action_space == 'discrete':
+                    actions[a] = act.item()
+                else:
+                    actions[a] = (
+                        act.squeeze(0)
+                        .detach()
+                        .cpu()
+                        .numpy()
+                        .astype(np.float32)
+                    )
                 logps[a] = logp
                 values[a] = val
 
@@ -317,7 +364,16 @@ class PPO:
 
                 act, logp, val = net.act(o)
 
-                actions[a] = act.item()
+                if self.policy.action_space == 'discrete':
+                    actions[a] = act.item()
+                else:
+                    actions[a] = (
+                        act.squeeze(0)
+                        .detach()
+                        .cpu()
+                        .numpy()
+                        .astype(np.float32)
+                    )
                 logps[a] = logp
                 values[a] = val
 
@@ -387,7 +443,9 @@ class PPO:
                     returns.append(self.buffer.returns[a][t])
                     advantages.append(self.buffer.advantages[a][t])
 
-            obs = torch.FloatTensor(np.array(obs)).to(self.device)
+            obs = torch.FloatTensor(
+                np.array(obs)
+            ).to(self.device) / 255.0
             actions = torch.LongTensor(np.array(actions)).to(self.device)
             old_log_probs = torch.FloatTensor(np.array(old_log_probs)).to(self.device)
             returns = torch.FloatTensor(np.array(returns)).to(self.device)
@@ -447,6 +505,9 @@ class PPO:
                 obs = torch.FloatTensor(
                     np.array([t[a] for t in self.buffer.obs])
                 ).to(self.device)
+                obs = torch.FloatTensor(
+                    np.array(obs)
+                ).to(self.device) / 255.0
 
                 actions = torch.LongTensor(
                     np.array([t[a] for t in self.buffer.actions])
@@ -523,6 +584,9 @@ class PPO:
         total_timesteps = self.config['training']['total_timesteps']
 
         timestep = 0
+        last_log_step = 0
+        last_eval_step = 0
+        last_save_step = 0
 
         while timestep < total_timesteps:
             observations, infos = self.env.reset()
@@ -534,6 +598,38 @@ class PPO:
             self.buffer.clear()
 
             while not done:
+
+                # ---------- Evaluation ----------
+                if (
+                    self.eval_enabled
+                    and timestep - last_eval_step >= self.eval_interval
+                ):
+
+                    avg_reward = self.evaluate(
+                        episodes=self.eval_episodes
+                    )
+
+                    print(
+                        f'[Evaluation] timestep={timestep} '
+                        f'avg_reward={avg_reward:.2f}'
+                    )
+
+                    last_eval_step = timestep
+                # --------------------------------
+
+                # -------- Checkpointing ---------
+
+                if timestep - last_save_step >= self.save_model_interval:
+
+                    self.save(
+                        f'checkpoints/checkpoint_{timestep}.pt'
+                    )
+
+                    print(f'[Checkpoint] saved at timestep={timestep}')
+
+                    last_save_step = timestep
+                # --------------------------------
+
                 actions, log_probs, values = \
                     self.select_actions(observations)
                 #print(f'Actions: {actions}')
@@ -543,10 +639,10 @@ class PPO:
 
                 done_dict = {
                     agent: (
-                        terminations[agent]
-                        or truncations[agent]
+                        terminations.get(agent, True)
+                        or truncations.get(agent, True)
                     )
-                    for agent in self.agents
+                    for agent in observations.keys()
                 }
 
                 done = all(done_dict.values())
@@ -568,6 +664,15 @@ class PPO:
                 episode_reward += np.mean(list(rewards.values()))
 
                 observations = next_obs
+
+                if timestep - last_log_step >= self.log_interval:
+
+                    print(
+                        f'[PPO] timestep={timestep} '
+                        f'episode_reward={episode_reward:.2f}'
+                    )
+
+                    last_log_step = timestep
 
                 timestep += 1
 
@@ -592,12 +697,6 @@ class PPO:
 
             self.update()
 
-            if timestep % self.config['logging']['log_interval'] == 0:
-                print(
-                    f'[PPO] timestep={timestep} '
-                    f'episode_reward={episode_reward:.2f}'
-                )
-
     # ======================================================
     # Evaluation
     # ======================================================
@@ -616,11 +715,21 @@ class PPO:
 
                 with torch.no_grad():
                     for agent, obs in observations.items():
-                        obs_tensor = torch.FloatTensor(obs).to(self.device)
+                        obs_tensor = (
+                            torch.FloatTensor(obs)
+                            .unsqueeze(0)
+                            .to(self.device)
+                        )
 
-                        logits, _ = self.policy(obs_tensor)
+                        dist, _ = self.policy.get_dist(obs_tensor)
 
-                        action = torch.argmax(logits).item()
+                        if self.policy.action_space == 'discrete':
+
+                            action = torch.argmax(dist.logits, dim=-1).item()
+
+                        else:
+                            action = dist.mean[0].detach().cpu().numpy()
+                            action = np.clip(action, -1.0, 1.0)
 
                         actions[agent] = action
 
@@ -638,6 +747,46 @@ class PPO:
 
         avg_reward = np.mean(rewards)
 
-        print(f'[Evaluation] Average Reward: {avg_reward:.2f}')
-
         return avg_reward
+    
+    def save(self, path):
+
+        if self.shared:
+
+            torch.save({
+                'model': self.policy.state_dict(),
+                'optimizer': self.optimizer.state_dict()
+            }, path)
+
+        else:
+
+            torch.save({
+                'models': {
+                    a: self.policies[a].state_dict()
+                    for a in self.agents
+                },
+                'optimizers': {
+                    a: self.optimizers[a].state_dict()
+                    for a in self.agents
+                }
+            }, path)
+
+    def load(self, path):
+
+        checkpoint = torch.load(path, map_location=self.device)
+
+        if self.shared:
+
+            self.policy.load_state_dict(checkpoint['model'])
+            self.optimizer.load_state_dict(checkpoint['optimizer'])
+
+        else:
+
+            for a in self.agents:
+                self.policies[a].load_state_dict(
+                    checkpoint['models'][a]
+                )
+
+                self.optimizers[a].load_state_dict(
+                    checkpoint['optimizers'][a]
+                )
