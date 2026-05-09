@@ -1,0 +1,109 @@
+# ==========================================================
+# Algorithm
+# ==========================================================
+
+algorithm:
+  name: "qmix"
+
+  shared_policy: false
+  centralized_critic: true
+  recurrent: true
+
+# ==========================================================
+# QMIX Settings
+# ==========================================================
+
+mixer:
+  enabled: true
+  type: "qmix"
+
+  mixing_hidden_dim: 32
+  hypernet_hidden_dim: 64
+
+# ==========================================================
+# Agent Network
+# ==========================================================
+
+model:
+  agent_hidden_size: 128
+  rnn_hidden_size: 64
+
+  mixer_hidden_size: 32
+
+  activation: "relu"
+
+# ==========================================================
+# Replay Buffer
+# ==========================================================
+
+buffer:
+  type: "episode"
+
+  capacity: 5000
+
+  # entire episode sequences
+  batch_size: 32
+
+  burn_in_steps: 0
+
+# ==========================================================
+# Training
+# ==========================================================
+
+training:
+  total_timesteps: 1000000
+
+  gamma: 0.99
+
+  learning_rate: 0.0005
+
+  target_update_interval: 200
+
+  double_q: true
+
+  grad_norm_clip: 10.0
+
+  train_interval: 1
+
+  learner_updates_per_step: 1
+
+# ==========================================================
+# Exploration
+# ==========================================================
+
+exploration:
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay_steps: 500000
+
+# ==========================================================
+# Evaluation
+# ==========================================================
+
+evaluation:
+  enabled: true
+
+  eval_interval: 10000
+  eval_episodes: 10
+
+  deterministic: true
+
+# ==========================================================
+# Logging
+# ==========================================================
+
+logging:
+  use_tensorboard: false
+  use_wandb: false
+
+  log_interval: 100
+
+  save_model_interval: 50000
+
+# ==========================================================
+# Device
+# ==========================================================
+
+device:
+  use_cuda: true
+  gpu_id: 0

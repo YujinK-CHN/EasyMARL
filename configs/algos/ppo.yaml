@@ -1,0 +1,70 @@
+# ==========================================================
+# Algorithm
+# ==========================================================
+
+algorithm:
+  name: "ppo"
+
+  shared_policy: true
+  centralized_critic: false
+  recurrent: false
+
+# ==========================================================
+# Training
+# ==========================================================
+
+training:
+  total_timesteps: 1000000
+
+  gamma: 0.99
+  gae_lambda: 0.95
+
+  learning_rate: 0.0003
+
+  batch_size: 1024
+  mini_batch_size: 256
+
+  ppo_epochs: 10
+  clip_range: 0.2
+
+  entropy_coef: 0.01
+  value_loss_coef: 0.5
+  max_grad_norm: 0.5
+
+# ==========================================================
+# Evaluation
+# ==========================================================
+
+evaluation:
+  enabled: true
+  eval_interval: 10000
+  eval_episodes: 10
+  deterministic: true
+
+# ==========================================================
+# Logging
+# ==========================================================
+
+logging:
+  use_tensorboard: false
+  use_wandb: false
+
+  log_interval: 100
+  save_model_interval: 50000
+
+# ==========================================================
+# Device
+# ==========================================================
+
+device:
+  use_cuda: true
+  gpu_id: 0
+
+# ==========================================================
+# Model
+# ==========================================================
+
+model:
+  actor_hidden_sizes: [256, 256]
+  critic_hidden_sizes: [256, 256]
+  activation: "relu"

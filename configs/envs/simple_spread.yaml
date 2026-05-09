@@ -1,0 +1,17 @@
+env:
+  family: "mpe"
+  name: "simple_spread_v3"
+  parallel: true
+
+  # Max episode length
+  max_cycles: 25
+
+  # Render mode:
+  #   human, rgb_array, none
+  render_mode: null
+
+  # Environment-specific parameters
+  kwargs:
+    N: 3
+    local_ratio: 0.5
+    continuous_actions: false
