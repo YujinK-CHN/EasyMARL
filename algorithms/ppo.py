@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.distributions import Categorical
+from torch.distributions import Categorical, Normal
 from collections import defaultdict
 
 class RolloutBuffer:
@@ -89,16 +89,54 @@ class CNNEncoder(nn.Module):
 # ==========================================================
 
 class ActorCritic(nn.Module):
-    def __init__(self, obs_dim, act_dim, encoder):
+    def __init__(
+        self,
+        obs_dim,
+        act_dim,
+        encoder,
+        action_space='discrete',   # "discrete" or "continuous"
+        log_std_init=-0.5
+    ):
         super().__init__()
 
         self.encoder = encoder
+        self.action_space = action_space
+        self.act_dim = act_dim
 
-        self.actor = nn.Sequential(
-            nn.Linear(encoder.out_dim, 256),
-            nn.ReLU(),
-            nn.Linear(256, act_dim)
-        )
+        # --------------------------------------------------
+        # Actor
+        # --------------------------------------------------
+
+        if self.action_space == 'discrete':
+
+            self.actor = nn.Sequential(
+                nn.Linear(encoder.out_dim, 256),
+                nn.ReLU(),
+                nn.Linear(256, act_dim)
+            )
+
+        elif self.action_space == 'continuous':
+
+            # Mean network
+            self.actor_mean = nn.Sequential(
+                nn.Linear(encoder.out_dim, 256),
+                nn.ReLU(),
+                nn.Linear(256, act_dim)
+            )
+
+            # Learnable log standard deviation
+            self.actor_log_std = nn.Parameter(
+                torch.ones(act_dim) * log_std_init
+            )
+
+        else:
+            raise ValueError(
+                f'Unsupported action_space: {action_space}'
+            )
+
+        # --------------------------------------------------
+        # Critic
+        # --------------------------------------------------
 
         self.critic = nn.Sequential(
             nn.Linear(encoder.out_dim, 256),
@@ -106,22 +144,79 @@ class ActorCritic(nn.Module):
             nn.Linear(256, 1)
         )
 
+    # ======================================================
+    # Forward
+    # ======================================================
+
     def forward(self, obs):
         z = self.encoder(obs)
-        return self.actor(z), self.critic(z)
+
+        if self.action_space == 'discrete':
+            actor_out = self.actor(z)
+
+        else:
+            actor_out = self.actor_mean(z)
+
+        value = self.critic(z)
+
+        return actor_out, value
+
+    # ======================================================
+    # Distribution helper
+    # ======================================================
+
+    def get_dist(self, obs):
+        actor_out, value = self.forward(obs)
+
+        if self.action_space == 'discrete':
+
+            dist = Categorical(logits=actor_out)
+
+        else:
+            mean = actor_out
+
+            std = torch.exp(self.actor_log_std)
+            std = std.expand_as(mean)
+
+            dist = Normal(mean, std)
+
+        return dist, value
+
+    # ======================================================
+    # Action sampling
+    # ======================================================
 
     def act(self, obs):
-        logits, value = self.forward(obs)
-        dist = Categorical(logits=logits)
+        dist, value = self.get_dist(obs)
+
         action = dist.sample()
-        log_prob = dist.log_prob(action)
+
+        if self.action_space == 'discrete':
+            log_prob = dist.log_prob(action)
+
+        else:
+            # sum across action dimensions
+            log_prob = dist.log_prob(action).sum(dim=-1)
+
         return action, log_prob, value
 
+    # ======================================================
+    # PPO evaluation
+    # ======================================================
+
     def evaluate(self, obs, actions):
-        logits, value = self.forward(obs)
-        dist = Categorical(logits=logits)
-        log_probs = dist.log_prob(actions)
-        entropy = dist.entropy()
+        dist, value = self.get_dist(obs)
+
+        if self.action_space == 'discrete':
+
+            log_probs = dist.log_prob(actions)
+            entropy = dist.entropy()
+
+        else:
+
+            log_probs = dist.log_prob(actions).sum(dim=-1)
+            entropy = dist.entropy().sum(dim=-1)
+
         return log_probs, entropy, value.squeeze(-1)
 
 # ==========================================================
@@ -149,8 +244,6 @@ class PPO:
         obs_space = env.observation_space(self.agents[0])
         act_space = env.action_space(self.agents[0])
 
-        self.act_dim = act_space.n
-
         obs_shape = obs_space.shape
 
         if len(obs_shape) == 1:
@@ -158,22 +251,35 @@ class PPO:
         else:
             encoder = lambda: CNNEncoder(obs_shape)
 
-        self.policies = {}
-        self.optimizers = {}
+        
 
         lr = config['training']['learning_rate']
 
-        if self.shared:
-            net = ActorCritic(obs_shape, self.act_dim, encoder()).to(self.device)
+        act_space = env.action_space(self.agents[0])
 
-            for a in self.agents:
-                self.policies[a] = net
+        if hasattr(act_space, "n"):
+            action_space_type = "discrete"
+            self.act_dim = act_space.n
+
+        else:
+            action_space_type = "continuous"
+            self.act_dim = act_space.shape[0]
+
+        print(f'Action space type: {action_space_type}, act_dim: {self.act_dim}')
+
+        if self.shared:
+            net = ActorCritic(obs_shape, self.act_dim, encoder(), action_space=action_space_type).to(self.device)
+
+            #for a in self.agents:
+            self.policy = net
 
             self.optimizer = optim.Adam(net.parameters(), lr=lr)
 
         else:
+            self.policies = {}
+            self.optimizers = {}
             for a in self.agents:
-                net = ActorCritic(obs_shape, self.act_dim, encoder()).to(self.device)
+                net = ActorCritic(obs_shape, self.act_dim, encoder(), action_space=action_space_type).to(self.device)
                 self.policies[a] = net
                 self.optimizers[a] = optim.Adam(net.parameters(), lr=lr)
 
@@ -187,20 +293,35 @@ class PPO:
     # ------------------------------------------------------
 
     def select_actions(self, obs):
-        actions, logps, values = {}, {}, {}
+        if self.shared:
+            actions, logps, values = {}, {}, {}
 
-        for a, o in obs.items():
-            o = torch.tensor(o, dtype=torch.float32, device=self.device).unsqueeze(0)
+            for a, o in obs.items():
+                o = torch.tensor(o, dtype=torch.float32, device=self.device).unsqueeze(0)
 
-            net = self.policies[a]
+                act, logp, val = self.policy.act(o)
 
-            act, logp, val = net.act(o)
+                actions[a] = act.item()
+                logps[a] = logp
+                values[a] = val
 
-            actions[a] = act.item()
-            logps[a] = logp
-            values[a] = val
+            return actions, logps, values
+        
+        else:
+            actions, logps, values = {}, {}, {}
 
-        return actions, logps, values
+            for a, o in obs.items():
+                o = torch.tensor(o, dtype=torch.float32, device=self.device).unsqueeze(0)
+
+                net = self.policies[a]
+
+                act, logp, val = net.act(o)
+
+                actions[a] = act.item()
+                logps[a] = logp
+                values[a] = val
+
+            return actions, logps, values
 
     # ======================================================
     # GAE Computation
@@ -291,7 +412,7 @@ class PPO:
                     mb_advantages = advantages[mb_idx]
 
                     new_log_probs, entropy, values = \
-                        self.policy.evaluate_actions(mb_obs, mb_actions)
+                        self.policy.evaluate(mb_obs, mb_actions)
 
                     ratio = torch.exp(new_log_probs - mb_old_log_probs)
 
@@ -437,6 +558,7 @@ class PPO:
                     for a in self.agents
                 })
                 self.buffer.rewards.append(rewards)
+                #print(f'Rewards: {rewards}')
                 self.buffer.dones.append(done_dict)
                 self.buffer.values.append({
                     a: values[a].detach().cpu().item()

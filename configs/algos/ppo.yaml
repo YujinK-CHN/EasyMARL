@@ -5,7 +5,7 @@
 algorithm:
   name: "ppo"
 
-  shared_policy: false
+  shared_policy: True
   centralized_critic: false
   recurrent: false
 
