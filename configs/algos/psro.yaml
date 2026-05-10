@@ -1,0 +1,111 @@
+# ==========================================================
+# Algorithm
+# ==========================================================
+
+algorithm:
+  name: psro
+
+  # Base RL oracle learner
+  oracle_algorithm: dqn
+
+
+# ==========================================================
+# Device
+# ==========================================================
+
+device:
+  use_cuda: true
+  gpu_id: 0
+
+
+# ==========================================================
+# PSRO
+# ==========================================================
+
+psro:
+
+  # Number of PSRO iterations
+  iterations: 20
+
+  # for each oracle training phase
+  oracle_training_steps: 50000
+
+  # Population size limit
+  max_population_size: 20
+
+  # Meta strategy solver
+  meta_solver: fictitious_play
+
+  # uniform / latest / meta_strategy
+  opponent_sampling: meta_strategy
+
+  # Add new oracle only if improvement
+  add_only_if_improved: true
+
+  # Evaluate against entire population
+  evaluate_full_population: true
+
+  # Payoff discounting
+  payoff_gamma: 1.0
+
+  # Save each new oracle
+  save_population: true
+
+  # Directory for policies
+  population_dir: checkpoints/psro_population
+
+# ==========================================================
+# Population Evaluation
+# ==========================================================
+
+evaluation:
+  enabled: true
+
+  eval_interval: 10000
+
+  eval_episodes: 10
+
+  # Build full payoff matrix
+  compute_payoff_matrix: true
+
+  # Round-robin evaluation
+  round_robin: true
+
+# ==========================================================
+# Logging
+# ==========================================================
+
+logging:
+  use_tensorboard: false
+  use_wandb: false
+
+  project_name: EasyMARL-PSRO
+
+  log_interval: 100
+
+  save_model_interval: 50000
+
+
+# ==========================================================
+# Self-Play
+# ==========================================================
+
+self_play:
+
+  # Probability of sampling latest policy
+  latest_policy_prob: 0.3
+
+  # Probability of random population sampling
+  population_sampling_prob: 0.7
+
+# ==========================================================
+# Replay / Opponent Pool
+# ==========================================================
+
+opponent_pool:
+
+  enabled: true
+
+  max_size: 50
+
+  sample_strategy: uniform

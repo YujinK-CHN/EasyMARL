@@ -8,6 +8,7 @@ from collections import defaultdict
 class RolloutBuffer:
     def __init__(self):
         self.obs = []
+        self.global_obs = []
         self.actions = []
         self.log_probs = []
         self.rewards = []
@@ -101,11 +102,18 @@ class ActorCritic(nn.Module):
         act_dim,
         encoder,
         action_space='discrete',   # "discrete" or "continuous"
-        log_std_init=-0.5
+        log_std_init=-0.5,
+        centralized_critic=False,
+        global_obs_dim=None
     ):
         super().__init__()
 
-        self.encoder = encoder
+        self.centralized_critic = centralized_critic
+        if self.centralized_critic:
+            self.actor_encoder = encoder
+            self.critic_encoder = MLPEncoder(global_obs_dim)
+        else:
+            self.encoder = encoder
         self.action_space = action_space
         self.act_dim = act_dim
 
@@ -143,37 +151,61 @@ class ActorCritic(nn.Module):
         # --------------------------------------------------
         # Critic
         # --------------------------------------------------
-
-        self.critic = nn.Sequential(
-            nn.Linear(encoder.out_dim, 256),
-            nn.ReLU(),
-            nn.Linear(256, 1)
-        )
+        if self.centralized_critic:
+            self.critic = nn.Sequential(
+                nn.Linear(self.critic_encoder.out_dim, 256),
+                nn.ReLU(),
+                nn.Linear(256, 1)
+            )
+        else:
+            self.critic = nn.Sequential(
+                nn.Linear(encoder.out_dim, 256),
+                nn.ReLU(),
+                nn.Linear(256, 1)
+            )
 
     # ======================================================
     # Forward
     # ======================================================
 
-    def forward(self, obs):
-        z = self.encoder(obs)
+    def forward(self, obs, global_obs=None):
+        if self.centralized_critic:
+            actor_z = self.actor_encoder(obs)
 
-        if self.action_space == 'discrete':
-            actor_out = self.actor(z)
+            if self.action_space == 'discrete':
+                actor_out = self.actor(actor_z)
 
+            else:
+                actor_out = self.actor_mean(actor_z)
+                actor_out = torch.clamp(actor_out, -10, 10)
+
+            critic_z = self.critic_encoder(global_obs)
+            value = self.critic(critic_z)
+
+            return actor_out, value
         else:
-            actor_out = self.actor_mean(z)
-            actor_out = torch.clamp(actor_out, -10, 10)
+            z = self.encoder(obs)
 
-        value = self.critic(z)
+            if self.action_space == 'discrete':
+                actor_out = self.actor(z)
 
-        return actor_out, value
+            else:
+                actor_out = self.actor_mean(z)
+                actor_out = torch.clamp(actor_out, -10, 10)
+
+            value = self.critic(z)
+
+            return actor_out, value
 
     # ======================================================
     # Distribution helper
     # ======================================================
 
-    def get_dist(self, obs):
-        actor_out, value = self.forward(obs)
+    def get_dist(self, obs, global_obs=None):
+        if self.centralized_critic and global_obs is not None:
+            actor_out, value = self.forward(obs, global_obs)
+        else:
+            actor_out, value = self.forward(obs)
 
         if self.action_space == 'discrete':
 
@@ -202,8 +234,8 @@ class ActorCritic(nn.Module):
     # Action sampling
     # ======================================================
 
-    def act(self, obs):
-        dist, value = self.get_dist(obs)
+    def act(self, obs, global_obs=None):
+        dist, value = self.get_dist(obs, global_obs)
 
         raw_action = dist.sample()
 
@@ -225,8 +257,11 @@ class ActorCritic(nn.Module):
     # PPO evaluation
     # ======================================================
 
-    def evaluate(self, obs, actions):
-        dist, value = self.get_dist(obs)
+    def evaluate(self, obs, actions, global_obs=None):
+        if self.centralized_critic:
+            dist, value = self.get_dist(obs, global_obs)
+        else:
+            dist, value = self.get_dist(obs)
 
         if self.action_space == 'discrete':
 
@@ -262,6 +297,7 @@ class PPO:
         self.value_loss_coef = config['training']['value_loss_coef']
         self.entropy_coef = config['training']['entropy_coef']
         self.max_grad_norm = config['training']['max_grad_norm']
+        self.centralized_critic = config['algorithm'].get('centralized_critic', False)
 
         # ======================================================
         # Evaluation
@@ -288,7 +324,8 @@ class PPO:
         else:
             encoder = lambda: CNNEncoder(obs_shape)
 
-        
+        if self.centralized_critic:
+            self.global_obs_dim = int(np.prod(obs_shape)) * len(self.agents)
 
         lr = config['training']['learning_rate']
 
@@ -305,7 +342,17 @@ class PPO:
         print(f'Action space type: {action_space_type}, act_dim: {self.act_dim}')
 
         if self.shared:
-            net = ActorCritic(obs_shape, self.act_dim, encoder(), action_space=action_space_type).to(self.device)
+            if self.centralized_critic:
+                net = ActorCritic(
+                    obs_shape,
+                    self.act_dim,
+                    encoder(),
+                    action_space=action_space_type,
+                    centralized_critic=True,
+                    global_obs_dim=self.global_obs_dim
+                ).to(self.device)
+            else:
+                net = ActorCritic(obs_shape, self.act_dim, encoder(), action_space=action_space_type).to(self.device)
 
             #for a in self.agents:
             self.policy = net
@@ -316,7 +363,17 @@ class PPO:
             self.policies = {}
             self.optimizers = {}
             for a in self.agents:
-                net = ActorCritic(obs_shape, self.act_dim, encoder(), action_space=action_space_type).to(self.device)
+                if self.centralized_critic:
+                    net = ActorCritic(
+                        obs_shape,
+                        self.act_dim,
+                        encoder(),
+                        action_space=action_space_type,
+                        centralized_critic=True,
+                        global_obs_dim=self.global_obs_dim
+                    ).to(self.device)
+                else:
+                    net = ActorCritic(obs_shape, self.act_dim, encoder(), action_space=action_space_type).to(self.device)
                 self.policies[a] = net
                 self.optimizers[a] = optim.Adam(net.parameters(), lr=lr)
 
@@ -329,7 +386,7 @@ class PPO:
 
     # ------------------------------------------------------
 
-    def select_actions(self, obs):
+    def select_actions(self, obs, global_obs=None):
         if self.shared:
             actions, logps, values = {}, {}, {}
 
@@ -342,7 +399,7 @@ class PPO:
                     ) / 255.0
                 ).unsqueeze(0)
 
-                act, logp, val = self.policy.act(o)
+                act, logp, val = self.policy.act(o, global_obs)
 
                 if self.policy.action_space == 'discrete':
                     actions[a] = act.item()
@@ -367,7 +424,7 @@ class PPO:
 
                 net = self.policies[a]
 
-                act, logp, val = net.act(o)
+                act, logp, val = net.act(o, global_obs)
 
                 if net.action_space == 'discrete':
                     actions[a] = act.item()
@@ -528,6 +585,11 @@ class PPO:
                     np.array(self.buffer.advantages[a])
                 ).to(self.device)
 
+                if self.centralized_critic:
+                    global_obs = torch.FloatTensor(
+                        np.array(self.buffer.global_obs)
+                    ).to(self.device) / 255.0
+
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
                 policy = self.policies[a]
@@ -548,8 +610,17 @@ class PPO:
                         mb_returns = returns[mb_idx]
                         mb_advantages = advantages[mb_idx]
 
-                        new_log_probs, entropy, values = \
-                            policy.evaluate(mb_obs, mb_actions)
+                        if self.centralized_critic:
+                            mb_global_obs = global_obs[mb_idx]
+                            new_log_probs, entropy, values = \
+                                policy.evaluate(
+                                    mb_obs,
+                                    mb_actions,
+                                    mb_global_obs
+                                )
+                        else:
+                            new_log_probs, entropy, values = \
+                                policy.evaluate(mb_obs, mb_actions)
 
                         ratio = torch.exp(new_log_probs - mb_old_log_probs)
 
@@ -622,7 +693,16 @@ class PPO:
             '''
             # --------------------------------
 
-            actions, log_probs, values = \
+            if self.centralized_critic:
+                global_obs = torch.tensor(
+                    self.build_global_obs(observations),
+                    dtype=torch.float32,
+                    device=self.device
+                ).unsqueeze(0)
+                actions, log_probs, values = \
+                    self.select_actions(observations, global_obs)
+            else:
+                actions, log_probs, values = \
                     self.select_actions(observations)
                 # print(f'Actions: {actions}')
 
@@ -661,6 +741,10 @@ class PPO:
                 a: values[a].detach().cpu().item()
                 for a in self.agents
             })
+
+            if self.centralized_critic:
+                global_obs = self.build_global_obs(observations)
+                self.buffer.global_obs.append(global_obs)
 
             episode_reward += np.mean(list(rewards.values()))
 
@@ -756,6 +840,15 @@ class PPO:
             rewards.append(episode_reward)
 
         return np.mean(rewards)
+    
+    def build_global_obs(self, obs_dict):
+
+        global_obs = []
+
+        for a in self.agents:
+            global_obs.append(obs_dict[a].flatten())
+
+        return np.concatenate(global_obs, axis=0)
     
     def save(self, path):
 
