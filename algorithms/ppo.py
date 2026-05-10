@@ -83,6 +83,8 @@ class CNNEncoder(nn.Module):
             x = x.unsqueeze(0)
 
         # NHWC -> NCHW
+        #print("CNN input shape:", x.shape)
+        #print("CNN input dtype:", x.dtype)
         x = x.permute(0, 3, 1, 2)
 
         x = x.float() / 255.0
@@ -111,7 +113,6 @@ class ActorCritic(nn.Module):
         self.centralized_critic = centralized_critic
         if self.centralized_critic:
             self.actor_encoder = encoder
-            self.critic_encoder = MLPEncoder(global_obs_dim)
         else:
             self.encoder = encoder
         self.action_space = action_space
@@ -153,7 +154,7 @@ class ActorCritic(nn.Module):
         # --------------------------------------------------
         if self.centralized_critic:
             self.critic = nn.Sequential(
-                nn.Linear(self.critic_encoder.out_dim, 256),
+                nn.Linear(global_obs_dim, 256),
                 nn.ReLU(),
                 nn.Linear(256, 1)
             )
@@ -169,7 +170,7 @@ class ActorCritic(nn.Module):
     # ======================================================
 
     def forward(self, obs, global_obs=None):
-        if self.centralized_critic:
+        if self.centralized_critic and global_obs is not None:
             actor_z = self.actor_encoder(obs)
 
             if self.action_space == 'discrete':
@@ -179,8 +180,7 @@ class ActorCritic(nn.Module):
                 actor_out = self.actor_mean(actor_z)
                 actor_out = torch.clamp(actor_out, -10, 10)
 
-            critic_z = self.critic_encoder(global_obs)
-            value = self.critic(critic_z)
+            value = self.critic(global_obs)
 
             return actor_out, value
         else:
@@ -274,6 +274,9 @@ class ActorCritic(nn.Module):
             entropy = dist.entropy().sum(dim=-1)
 
         return log_probs, entropy, value.squeeze(-1)
+    
+    def encode(self, obs):
+        return self.actor_encoder(obs)
 
 # ==========================================================
 # PPO
@@ -325,7 +328,7 @@ class PPO:
             encoder = lambda: CNNEncoder(obs_shape)
 
         if self.centralized_critic:
-            self.global_obs_dim = int(np.prod(obs_shape)) * len(self.agents)
+            self.global_obs_dim = 256 * len(self.agents)
 
         lr = config['training']['learning_rate']
 
@@ -396,7 +399,7 @@ class PPO:
                         o,
                         dtype=torch.float32,
                         device=self.device
-                    ) / 255.0
+                    )
                 ).unsqueeze(0)
 
                 act, logp, val = self.policy.act(o, global_obs)
@@ -507,12 +510,15 @@ class PPO:
 
             obs = torch.FloatTensor(
                 np.array(obs)
-            ).to(self.device) / 255.0
+            ).to(self.device)
 
             if self.centralized_critic:
-                global_obs = torch.FloatTensor(
-                    np.array(self.buffer.global_obs)
-                ).to(self.device) / 255.0
+                global_obs = []
+                for t in range(len(self.buffer.global_obs)):
+                    for _ in self.agents:
+                        global_obs.append(self.buffer.global_obs[t])
+
+                global_obs = torch.stack(global_obs).to(self.device)
 
             actions = torch.LongTensor(np.array(actions)).to(self.device)
             old_log_probs = torch.FloatTensor(np.array(old_log_probs)).to(self.device)
@@ -582,7 +588,7 @@ class PPO:
 
                 obs = torch.FloatTensor(
                     np.array([t[a] for t in self.buffer.obs])
-                ).to(self.device) / 255.0
+                ).to(self.device)
 
                 actions = torch.LongTensor(
                     np.array([t[a] for t in self.buffer.actions])
@@ -601,9 +607,12 @@ class PPO:
                 ).to(self.device)
 
                 if self.centralized_critic:
-                    global_obs = torch.FloatTensor(
-                        np.array(self.buffer.global_obs)
-                    ).to(self.device) / 255.0
+                    global_obs = []
+                    for t in range(len(self.buffer.global_obs)):
+                        for _ in self.agents:
+                            global_obs.append(self.buffer.global_obs[t])
+
+                    global_obs = torch.stack(global_obs).to(self.device)
 
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
@@ -858,12 +867,28 @@ class PPO:
     
     def build_global_obs(self, obs_dict):
 
-        global_obs = []
+        features = []
 
-        for a in self.agents:
-            global_obs.append(obs_dict[a].flatten())
+        with torch.no_grad():
 
-        return np.concatenate(global_obs, axis=0)
+            for a in self.agents:
+
+                obs = torch.tensor(
+                    obs_dict[a],
+                    dtype=torch.float32,
+                    device=self.device
+                ).unsqueeze(0)
+
+                if self.shared:
+                    z = self.policy.encode(obs)
+                else:
+                    z = self.policies[a].encode(obs)
+
+                features.append(z)
+
+        global_obs = torch.cat(features, dim=-1)
+
+        return global_obs.squeeze(0)
     
     def save(self, path):
 
