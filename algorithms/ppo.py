@@ -595,6 +595,7 @@ class PPO:
 
         while timestep < total_timesteps:
             # ---------- Evaluation ----------
+            '''
             if (self.eval_enabled and timestep % self.eval_interval == 0):
 
                 avg_reward = self.evaluate(
@@ -606,9 +607,11 @@ class PPO:
                     f'avg_reward={avg_reward:.2f}'
                 )
                 observations, infos = self.env.reset(seed=self.config['env']['seed'])
+            '''
             # --------------------------------
 
             # -------- Checkpointing ---------
+            '''
             if timestep % self.save_model_interval == 0 and timestep > 0:
 
                 self.save(
@@ -616,6 +619,7 @@ class PPO:
                 )
 
                 print(f'[Checkpoint] saved at timestep={timestep}')
+            '''
             # --------------------------------
 
             actions, log_probs, values = \
@@ -695,7 +699,7 @@ class PPO:
     def evaluate(self, episodes=5):
         rewards = []
 
-        for i in range(episodes):
+        for _ in range(episodes):
             observations, infos = self.env.reset()
 
             done = False
