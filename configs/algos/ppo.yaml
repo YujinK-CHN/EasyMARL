@@ -5,7 +5,7 @@
 algorithm:
   name: "ppo"
 
-  shared_policy: False
+  shared_policy: True
   centralized_critic: True #Independent PPO → centralized_critic=False; MAPPO / CTDE → centralized_critic=True
   recurrent: false
 

@@ -510,9 +510,9 @@ class PPO:
             ).to(self.device) / 255.0
 
             if self.centralized_critic:
-                    global_obs = torch.FloatTensor(
-                        np.array(self.buffer.global_obs)
-                    ).to(self.device) / 255.0
+                global_obs = torch.FloatTensor(
+                    np.array(self.buffer.global_obs)
+                ).to(self.device) / 255.0
 
             actions = torch.LongTensor(np.array(actions)).to(self.device)
             old_log_probs = torch.FloatTensor(np.array(old_log_probs)).to(self.device)
@@ -540,16 +540,16 @@ class PPO:
                     mb_advantages = advantages[mb_idx]
 
                     if self.centralized_critic:
-                            mb_global_obs = global_obs[mb_idx]
-                            new_log_probs, entropy, values = \
-                                policy.evaluate(
-                                    mb_obs,
-                                    mb_actions,
-                                    mb_global_obs
-                                )
+                        mb_global_obs = global_obs[mb_idx]
+                        new_log_probs, entropy, values = \
+                            self.policy.evaluate(
+                                mb_obs,
+                                mb_actions,
+                                mb_global_obs
+                            )
                     else:
                         new_log_probs, entropy, values = \
-                            policy.evaluate(mb_obs, mb_actions)
+                            self.policy.evaluate(mb_obs, mb_actions)
 
                     ratio = torch.exp(new_log_probs - mb_old_log_probs)
 
