@@ -20,6 +20,6 @@ env:
     bounce_randomness: false
     max_reward: 100
     off_screen_penalty: -10
-    render_mode: null
+    render_mode: "human"
     render_ratio: 2
     render_fps: 15
