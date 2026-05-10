@@ -203,7 +203,7 @@ class ActorCritic(nn.Module):
 
     def get_dist(self, obs, global_obs=None):
         if self.centralized_critic and global_obs is not None:
-            actor_out, value = self.forward(obs, global_obs)
+            actor_out, value = self.forward(obs, global_obs=global_obs)
         else:
             actor_out, value = self.forward(obs)
 
@@ -235,7 +235,7 @@ class ActorCritic(nn.Module):
     # ======================================================
 
     def act(self, obs, global_obs=None):
-        dist, value = self.get_dist(obs, global_obs)
+        dist, value = self.get_dist(obs, global_obs=global_obs)
 
         raw_action = dist.sample()
 
@@ -259,7 +259,7 @@ class ActorCritic(nn.Module):
 
     def evaluate(self, obs, actions, global_obs=None):
         if self.centralized_critic:
-            dist, value = self.get_dist(obs, global_obs)
+            dist, value = self.get_dist(obs, global_obs=global_obs)
         else:
             dist, value = self.get_dist(obs)
 
@@ -508,6 +508,12 @@ class PPO:
             obs = torch.FloatTensor(
                 np.array(obs)
             ).to(self.device) / 255.0
+
+            if self.centralized_critic:
+                    global_obs = torch.FloatTensor(
+                        np.array(self.buffer.global_obs)
+                    ).to(self.device) / 255.0
+
             actions = torch.LongTensor(np.array(actions)).to(self.device)
             old_log_probs = torch.FloatTensor(np.array(old_log_probs)).to(self.device)
             returns = torch.FloatTensor(np.array(returns)).to(self.device)
@@ -533,8 +539,17 @@ class PPO:
                     mb_returns = returns[mb_idx]
                     mb_advantages = advantages[mb_idx]
 
-                    new_log_probs, entropy, values = \
-                        self.policy.evaluate(mb_obs, mb_actions)
+                    if self.centralized_critic:
+                            mb_global_obs = global_obs[mb_idx]
+                            new_log_probs, entropy, values = \
+                                policy.evaluate(
+                                    mb_obs,
+                                    mb_actions,
+                                    mb_global_obs
+                                )
+                    else:
+                        new_log_probs, entropy, values = \
+                            policy.evaluate(mb_obs, mb_actions)
 
                     ratio = torch.exp(new_log_probs - mb_old_log_probs)
 
