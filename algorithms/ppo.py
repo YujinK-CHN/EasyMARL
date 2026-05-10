@@ -314,6 +314,7 @@ class PPO:
         # Logging
         # ======================================================
 
+        self.log_type = config['logging']['log_type']
         self.log_interval = config['logging']['log_interval']
         self.save_model_interval = config['logging']['save_model_interval']
 
@@ -684,6 +685,8 @@ class PPO:
 
         episode_reward = 0.0
 
+        ind_episode_reward = {a: 0.0 for a in self.agents}
+
         observations, infos = self.env.reset(seed=self.config['env']['seed'])
 
         self.buffer.clear()
@@ -735,11 +738,18 @@ class PPO:
             # print(f'Rewards: {rewards}')
 
             if timestep % self.log_interval == 0:
-                print(
-                    f'[PPO] timestep={timestep} '
-                    f'episode_reward={episode_reward:.2f}'
-                )
-                episode_reward = 0.0
+                if self.log_type == "independent":
+                    print(
+                        f'[PPO] timestep={timestep} '
+                        f'episode_reward={ind_episode_reward}'
+                    )
+                    ind_episode_reward = {a: 0.0 for a in self.agents}
+                else:
+                    print(
+                        f'[PPO] timestep={timestep} '
+                        f'episode_reward={episode_reward:.2f}'
+                    )
+                    episode_reward = 0.0
 
             done_dict = {
                 agent: (
@@ -770,7 +780,13 @@ class PPO:
                 global_obs = self.build_global_obs(observations)
                 self.buffer.global_obs.append(global_obs)
 
-            episode_reward += np.mean(list(rewards.values()))
+            if self.log_type == "mean":
+                episode_reward += np.mean(list(rewards.values()))
+            elif self.log_type == "max":
+                episode_reward += np.max(list(rewards.values()))
+            elif self.log_type == "independent":
+                for a, r in rewards.items():
+                    ind_episode_reward[a] += r
 
             observations = next_obs
 
