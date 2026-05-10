@@ -162,6 +162,7 @@ class ActorCritic(nn.Module):
 
         else:
             actor_out = self.actor_mean(z)
+            actor_out = torch.clamp(actor_out, -10, 10)
 
         value = self.critic(z)
 
@@ -179,7 +180,7 @@ class ActorCritic(nn.Module):
             dist = Categorical(logits=actor_out)
 
         else:
-            mean = actor_out
+            mean = torch.nan_to_num(actor_out, nan=0.0, posinf=1.0, neginf=-1.0)
 
             log_std = torch.clamp(
                 self.actor_log_std,
@@ -187,9 +188,12 @@ class ActorCritic(nn.Module):
                 2
             )
 
-            std = torch.exp(log_std)
+            std = torch.exp(log_std).clamp(1e-3, 1.0)
             std = std.expand_as(mean)
-
+            if torch.isnan(mean).any():
+                print("NaN in mean detected!")
+                print(mean)
+                raise ValueError("Policy exploded")
             dist = Normal(mean, std)
 
         return dist, value
@@ -252,6 +256,7 @@ class PPO:
         self.gamma = config['training']['gamma']
         self.gae_lambda = config['training']['gae_lambda']
         self.ppo_epochs = config['training']['ppo_epochs']
+        self.batch_size = config['training']['batch_size']
         self.mini_batch_size = config['training']['mini_batch_size']
         self.clip_range = config['training']['clip_range']
         self.value_loss_coef = config['training']['value_loss_coef']
@@ -364,7 +369,7 @@ class PPO:
 
                 act, logp, val = net.act(o)
 
-                if self.policy.action_space == 'discrete':
+                if net.action_space == 'discrete':
                     actions[a] = act.item()
                 else:
                     actions[a] = (
@@ -453,6 +458,8 @@ class PPO:
 
             # normalize advantages
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+            advantages = torch.clamp(advantages, -5, 5)
+            returns = torch.clamp(returns, -10, 10)
 
             dataset_size = obs.shape[0]
 
@@ -498,15 +505,11 @@ class PPO:
 
                     self.optimizer.step()
 
-            self.buffer.clear()
         else:
             for a in self.agents:
 
                 obs = torch.FloatTensor(
                     np.array([t[a] for t in self.buffer.obs])
-                ).to(self.device)
-                obs = torch.FloatTensor(
-                    np.array(obs)
                 ).to(self.device) / 255.0
 
                 actions = torch.LongTensor(
@@ -574,7 +577,6 @@ class PPO:
 
                         optimizer.step()
 
-            self.buffer.clear()
 
     # ======================================================
     # Training Loop
@@ -584,118 +586,107 @@ class PPO:
         total_timesteps = self.config['training']['total_timesteps']
 
         timestep = 0
-        last_log_step = 0
-        last_eval_step = 0
-        last_save_step = 0
+
+        episode_reward = 0.0
+
+        observations, infos = self.env.reset(seed=self.config['env']['seed'])
+
+        self.buffer.clear()
 
         while timestep < total_timesteps:
-            observations, infos = self.env.reset()
+            # ---------- Evaluation ----------
+            if (self.eval_enabled and timestep % self.eval_interval == 0):
 
-            done = False
-
-            episode_reward = 0
-
-            self.buffer.clear()
-
-            while not done:
-
-                # ---------- Evaluation ----------
-                if (
-                    self.eval_enabled
-                    and timestep - last_eval_step >= self.eval_interval
-                ):
-
-                    avg_reward = self.evaluate(
-                        episodes=self.eval_episodes
-                    )
-
-                    print(
-                        f'[Evaluation] timestep={timestep} '
-                        f'avg_reward={avg_reward:.2f}'
-                    )
-
-                    last_eval_step = timestep
-                # --------------------------------
-
-                # -------- Checkpointing ---------
-
-                if timestep - last_save_step >= self.save_model_interval:
-
-                    self.save(
-                        f'checkpoints/checkpoint_{timestep}.pt'
-                    )
-
-                    print(f'[Checkpoint] saved at timestep={timestep}')
-
-                    last_save_step = timestep
-                # --------------------------------
-
-                actions, log_probs, values = \
-                    self.select_actions(observations)
-                #print(f'Actions: {actions}')
-
-                next_obs, rewards, terminations, truncations, infos = \
-                    self.env.step(actions)
-
-                done_dict = {
-                    agent: (
-                        terminations.get(agent, True)
-                        or truncations.get(agent, True)
-                    )
-                    for agent in observations.keys()
-                }
-
-                done = all(done_dict.values())
-
-                self.buffer.obs.append(observations)
-                self.buffer.actions.append(actions)
-                self.buffer.log_probs.append({
-                    a: log_probs[a].detach().cpu().item()
-                    for a in self.agents
-                })
-                self.buffer.rewards.append(rewards)
-                #print(f'Rewards: {rewards}')
-                self.buffer.dones.append(done_dict)
-                self.buffer.values.append({
-                    a: values[a].detach().cpu().item()
-                    for a in self.agents
-                })
-
-                episode_reward += np.mean(list(rewards.values()))
-
-                observations = next_obs
-
-                if timestep - last_log_step >= self.log_interval:
-
-                    print(
-                        f'[PPO] timestep={timestep} '
-                        f'episode_reward={episode_reward:.2f}'
-                    )
-
-                    last_log_step = timestep
-
-                timestep += 1
-
-            next_value = {a: 0.0 for a in self.agents}
-
-            #print(self.buffer.rewards)
-            #print(self.buffer.values)
-
-            returns, advantages = \
-                self.compute_returns_and_advantages(
-                    self.buffer.rewards,
-                    self.buffer.dones,
-                    self.buffer.values,
-                    next_value
+                avg_reward = self.evaluate(
+                    episodes=self.eval_episodes
                 )
-            
-            #print(f'Returns: {len(returns["first_0"])}')
-            #print(f'Advantages: {len(advantages["first_0"])}')
 
-            self.buffer.returns = returns
-            self.buffer.advantages = advantages
+                print(
+                    f'[Evaluation] timestep={timestep} '
+                    f'avg_reward={avg_reward:.2f}'
+                )
+                observations, infos = self.env.reset(seed=self.config['env']['seed'])
+            # --------------------------------
 
-            self.update()
+            # -------- Checkpointing ---------
+            if timestep % self.save_model_interval == 0 and timestep > 0:
+
+                self.save(
+                    f'checkpoints/checkpoint_{timestep}.pt'
+                )
+
+                print(f'[Checkpoint] saved at timestep={timestep}')
+            # --------------------------------
+
+            actions, log_probs, values = \
+                    self.select_actions(observations)
+                # print(f'Actions: {actions}')
+
+            next_obs, rewards, terminations, truncations, infos = \
+                self.env.step(actions)
+            # print(f'Rewards: {rewards}')
+
+            if timestep % self.log_interval == 0:
+                print(
+                    f'[PPO] timestep={timestep} '
+                    f'episode_reward={episode_reward:.2f}'
+                )
+                episode_reward = 0.0
+
+            done_dict = {
+                agent: (
+                    terminations.get(agent, True)
+                    or truncations.get(agent, True)
+                )
+                for agent in observations.keys()
+            }
+
+            done = all(done_dict.values())
+            if done:
+                observations, infos = self.env.reset(seed=self.config['env']['seed'])
+
+            self.buffer.obs.append(observations)
+            self.buffer.actions.append(actions)
+            self.buffer.log_probs.append({
+                a: log_probs[a].detach().cpu().item()
+                for a in self.agents
+            })
+            self.buffer.rewards.append(rewards)
+            self.buffer.dones.append(done_dict)
+            self.buffer.values.append({
+                a: values[a].detach().cpu().item()
+                for a in self.agents
+            })
+
+            episode_reward += np.mean(list(rewards.values()))
+
+            observations = next_obs
+
+            # -------- Compute returns and advantages, then update policy ---------
+            if timestep % self.batch_size == 0 and timestep > 0:
+                next_value = {a: 0.0 for a in self.agents}
+
+                #print(len(self.buffer.rewards))
+                #print(self.buffer.values)
+
+                returns, advantages = \
+                    self.compute_returns_and_advantages(
+                        self.buffer.rewards,
+                        self.buffer.dones,
+                        self.buffer.values,
+                        next_value
+                    )
+                
+                #print(f'Returns: {len(returns["first_0"])}')
+                #print(f'Advantages: {len(advantages["first_0"])}')
+
+                self.buffer.returns = returns
+                self.buffer.advantages = advantages
+
+                self.update()
+                self.buffer.clear()
+
+            timestep += 1
 
     # ======================================================
     # Evaluation
@@ -704,31 +695,46 @@ class PPO:
     def evaluate(self, episodes=5):
         rewards = []
 
-        for _ in range(episodes):
+        for i in range(episodes):
             observations, infos = self.env.reset()
 
             done = False
-            episode_reward = 0
+            episode_reward = 0.0
 
             while not done:
                 actions = {}
 
                 with torch.no_grad():
+
                     for agent, obs in observations.items():
+
                         obs_tensor = (
                             torch.FloatTensor(obs)
                             .unsqueeze(0)
                             .to(self.device)
                         )
 
-                        dist, _ = self.policy.get_dist(obs_tensor)
+                        # -----------------------------
+                        # choose correct policy
+                        # -----------------------------
+                        if self.shared:
+                            policy = self.policy
+                        else:
+                            policy = self.policies[agent]
 
-                        if self.policy.action_space == 'discrete':
+                        dist, _ = policy.get_dist(obs_tensor)
 
-                            action = torch.argmax(dist.logits, dim=-1).item()
+                        # -----------------------------
+                        # action selection
+                        # -----------------------------
+                        if policy.action_space == 'discrete':
+                            action = torch.argmax(
+                                dist.logits,
+                                dim=-1
+                            ).item()
 
                         else:
-                            action = dist.mean[0].detach().cpu().numpy()
+                            action = dist.mean[0].cpu().numpy()
                             action = np.clip(action, -1.0, 1.0)
 
                         actions[agent] = action
@@ -738,16 +744,14 @@ class PPO:
 
                 episode_reward += sum(reward.values())
 
-                done = all([
+                done = all(
                     terminations[a] or truncations[a]
-                    for a in self.agents
-                ])
+                    for a in observations.keys()
+                )
 
             rewards.append(episode_reward)
 
-        avg_reward = np.mean(rewards)
-
-        return avg_reward
+        return np.mean(rewards)
     
     def save(self, path):
 
