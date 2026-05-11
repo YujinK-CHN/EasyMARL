@@ -1,4 +1,8 @@
 import numpy as np
+import os
+import random
+import string
+import csv
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -691,6 +695,28 @@ class PPO:
 
         self.buffer.clear()
 
+        ###################################################
+        # ensure folder exists 
+        os.makedirs("results/PPO", exist_ok=True)
+        # generate unique filename
+        while True:
+            rand_code = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+            filename = f"results/PPO/ppo_{self.config['env']['name']}_{rand_code}.csv"
+            
+            if not os.path.exists(filename):
+                break  # found unused name
+            
+        # logger
+        log_file = open(filename, "w", newline="")
+        writer = csv.writer(log_file)
+
+        if self.log_type == "independent":
+            header = ["timestep"] + [f"reward_{a}" for a in self.agents]
+        elif self.log_type in ["mean", "max"]:
+            header = ["timestep", "episode_reward"]
+        writer.writerow(header)
+        ###################################################
+
         while timestep < total_timesteps:
             # ---------- Evaluation ----------
             '''
@@ -743,13 +769,14 @@ class PPO:
                         f'[PPO] timestep={timestep} '
                         f'episode_reward={ind_episode_reward}'
                     )
-                    ind_episode_reward = {a: 0.0 for a in self.agents}
+                    writer.writerow([timestep] + [ind_episode_reward[a] for a in self.agents])
                 else:
                     print(
                         f'[PPO] timestep={timestep} '
                         f'episode_reward={episode_reward:.2f}'
                     )
                     episode_reward = 0.0
+                    writer.writerow([timestep, episode_reward])
 
             done_dict = {
                 agent: (
@@ -758,10 +785,6 @@ class PPO:
                 )
                 for agent in observations.keys()
             }
-
-            done = all(done_dict.values())
-            if done:
-                observations, infos = self.env.reset(seed=self.config['env']['seed'])
 
             self.buffer.obs.append(observations)
             self.buffer.actions.append(actions)
@@ -780,6 +803,11 @@ class PPO:
                 global_obs = self.build_global_obs(observations)
                 self.buffer.global_obs.append(global_obs)
 
+            if all(done_dict.values()):
+                observations, _ = self.env.reset(seed=self.config['env']['seed'])
+            else:
+                observations = next_obs
+
             if self.log_type == "mean":
                 episode_reward += np.mean(list(rewards.values()))
             elif self.log_type == "max":
@@ -787,8 +815,6 @@ class PPO:
             elif self.log_type == "independent":
                 for a, r in rewards.items():
                     ind_episode_reward[a] += r
-
-            observations = next_obs
 
             # -------- Compute returns and advantages, then update policy ---------
             if timestep % self.batch_size == 0 and timestep > 0:

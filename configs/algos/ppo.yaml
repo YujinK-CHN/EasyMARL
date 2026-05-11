@@ -7,7 +7,7 @@ algorithm:
 
   shared_policy: False
   centralized_critic: False #Independent PPO → centralized_critic=False; MAPPO / CTDE → centralized_critic=True
-  recurrent: false
+  recurrent: False
 
 # ==========================================================
 # Training
@@ -21,7 +21,7 @@ training:
 
   learning_rate: 0.0001
 
-  batch_size: 512
+  batch_size: 1024
   mini_batch_size: 128
 
   ppo_epochs: 10
@@ -48,8 +48,8 @@ logging:
   use_tensorboard: false
   use_wandb: false
 
-  log_type: "independent" # "mean" or "max" or "independent"
-  log_interval: 256
+  log_type: "mean" # "mean" or "max" or "independent"
+  log_interval: 512
   save_model_interval: 50000
 
 # ==========================================================

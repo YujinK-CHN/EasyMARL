@@ -37,7 +37,7 @@ def main():
     parser.add_argument(
         '--env',
         type=str,
-        default='boxing'
+        default='cooperative_pong'
     )
 
     args = parser.parse_args()
@@ -90,7 +90,11 @@ def main():
             from algorithms.ppo import PPO
 
             agent = PPO(config, env)
+        elif args.algo == 'qmix':
 
+            from algorithms.qmix import QMIX
+
+            agent = QMIX(config, env)
         else:
             raise NotImplementedError(
                 f'Algorithm {args.algo} not implemented'

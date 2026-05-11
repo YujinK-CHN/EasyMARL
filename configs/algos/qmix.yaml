@@ -1,3 +1,6 @@
+# Note: QMIX is only defined for discrete action spaces
+# For continuous spaces, argmax(Q) and Q-value vectors are not meaningful
+
 # ==========================================================
 # Algorithm
 # ==========================================================
@@ -5,8 +8,6 @@
 algorithm:
   name: "qmix"
 
-  shared_policy: false
-  centralized_critic: true
   recurrent: true
 
 # ==========================================================
@@ -27,9 +28,6 @@ mixer:
 model:
   agent_hidden_size: 128
   rnn_hidden_size: 64
-
-  mixer_hidden_size: 32
-
   activation: "relu"
 
 # ==========================================================
@@ -39,10 +37,10 @@ model:
 buffer:
   type: "episode"
 
-  capacity: 5000
+  capacity: 2048
 
   # entire episode sequences
-  batch_size: 32
+  batch_size: 128
 
   burn_in_steps: 0
 
@@ -57,7 +55,7 @@ training:
 
   learning_rate: 0.0005
 
-  target_update_interval: 200
+  target_update_interval: 205
 
   double_q: true
 
@@ -93,11 +91,8 @@ evaluation:
 # ==========================================================
 
 logging:
-  use_tensorboard: false
-  use_wandb: false
-
-  log_interval: 100
-
+  log_type: "independent"  # "mean" or "max" or "independent"
+  log_interval: 512
   save_model_interval: 50000
 
 # ==========================================================
