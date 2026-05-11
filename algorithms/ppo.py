@@ -682,7 +682,7 @@ class PPO:
     # Training Loop
     # ======================================================
 
-    def train(self):
+    def train(self, callback=None):
         total_timesteps = self.config['training']['total_timesteps']
 
         timestep = 0
@@ -763,21 +763,6 @@ class PPO:
                 self.env.step(actions)
             # print(f'Rewards: {rewards}')
 
-            if timestep % self.log_interval == 0:
-                if self.log_type == "independent":
-                    print(
-                        f'[PPO] timestep={timestep} '
-                        f'episode_reward={ind_episode_reward}'
-                    )
-                    writer.writerow([timestep] + [ind_episode_reward[a] for a in self.agents])
-                else:
-                    print(
-                        f'[PPO] timestep={timestep} '
-                        f'episode_reward={episode_reward:.2f}'
-                    )
-                    episode_reward = 0.0
-                    writer.writerow([timestep, episode_reward])
-
             done_dict = {
                 agent: (
                     terminations.get(agent, True)
@@ -815,6 +800,37 @@ class PPO:
             elif self.log_type == "independent":
                 for a, r in rewards.items():
                     ind_episode_reward[a] += r
+
+            if timestep % self.log_interval == 0:
+                if self.log_type == "independent":
+                    print(
+                        f'[PPO] timestep={timestep} '
+                        f'episode_reward={ind_episode_reward}'
+                    )
+                    if callback:
+                        results = {
+                            "timestep": timestep,
+                            "episode_reward": {
+                                a: ind_episode_reward[a]
+                                for a in self.agents
+                            }
+                        }
+                        callback(results)
+                    ind_episode_reward = {a: 0.0 for a in self.agents}
+                    writer.writerow([timestep] + [ind_episode_reward[a] for a in self.agents])
+                else:
+                    print(
+                        f'[PPO] timestep={timestep} '
+                        f'episode_reward={episode_reward:.2f}'
+                    )
+                    if callback:
+                        results = {
+                            "timestep": timestep,
+                            "episode_reward": episode_reward
+                        }
+                        callback(results)
+                    episode_reward = 0.0
+                    writer.writerow([timestep, episode_reward])
 
             # -------- Compute returns and advantages, then update policy ---------
             if timestep % self.batch_size == 0 and timestep > 0:

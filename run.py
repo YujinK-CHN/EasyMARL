@@ -4,6 +4,8 @@ from scipy.io import savemat
 
 from utils import make_env
 
+def callback(res):
+    pass
 
 # ==========================================================
 # Config Loader
@@ -104,7 +106,7 @@ def main():
         # Train
         # --------------------------------------------------
 
-        agent.train()
+        agent.train(callback=callback)
 
         # --------------------------------------------------
         # Close Environment
