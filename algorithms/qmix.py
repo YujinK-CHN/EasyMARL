@@ -162,6 +162,7 @@ class QMIX:
 
         sample_obs = env.reset()[0][self.agents[0]]
         obs_shape = np.array(sample_obs).shape   # (C,H,W)
+        self.train_step_count = 0
 
         model_cfg = config["model"]
         mix_cfg = config["mixer"]
@@ -426,7 +427,6 @@ class QMIX:
 
         chosen_action_qvals = []
         target_max_qvals = []
-        train_step_count = 0
 
         for i, agent in enumerate(self.agents):
 
@@ -557,7 +557,7 @@ class QMIX:
         # Target update
         # ============================================================
 
-        if train_step_count % self.target_update_interval == 0:
+        if self.train_step_count % self.target_update_interval == 0:
 
             self.target_mixer.load_state_dict(
                 self.mixer.state_dict()
@@ -568,7 +568,7 @@ class QMIX:
                     self.agents_net[a].state_dict()
                 )
 
-        train_step_count += 1
+        self.train_step_count += 1
 
     # ======================================================
     # Main training loop (PettingZoo parallel)

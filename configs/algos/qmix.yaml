@@ -37,7 +37,7 @@ model:
 buffer:
   type: "episode"
 
-  capacity: 2048
+  capacity: 1024
 
   # entire episode sequences
   batch_size: 128
@@ -55,7 +55,7 @@ training:
 
   learning_rate: 0.0005
 
-  target_update_interval: 205
+  target_update_interval: 200
 
   double_q: true
 
