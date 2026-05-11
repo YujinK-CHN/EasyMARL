@@ -1,4 +1,8 @@
+import os
+import string
+import csv
 import numpy as np
+from tqdm import trange
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -570,7 +574,8 @@ class QMIX:
     # Main training loop (PettingZoo parallel)
     # ======================================================
 
-    def train(self):
+    def train(self, callback=None):
+        total_timesteps = self.config['training']['total_timesteps']
 
         timestep = 0
 
@@ -587,25 +592,34 @@ class QMIX:
             for a in self.agents
         }
 
-        while timestep < self.config["training"]["total_timesteps"]:
+        ###################################################
+        # ensure folder exists 
+        os.makedirs("results/QMIX", exist_ok=True)
+        # generate unique filename
+        while True:
+            rand_code = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+            filename = f"results/QMIX/qmix_{self.config['env']['name']}_{rand_code}.csv"
+            
+            if not os.path.exists(filename):
+                break  # found unused name
+            
+        # logger
+        log_file = open(filename, "w", newline="")
+        writer = csv.writer(log_file)
+
+        if self.log_type == "independent":
+            header = ["timestep"] + [f"reward_{a}" for a in self.agents]
+        elif self.log_type in ["mean", "max"]:
+            header = ["timestep", "episode_reward"]
+        writer.writerow(header)
+        ###################################################
+
+        iterator = trange(total_timesteps)
+        for timestep in iterator:
 
             actions, hidden = self.select_actions(observations, hidden)
 
             next_obs, rewards, terminations, truncations, _ = self.env.step(actions)
-
-            if timestep % self.log_interval == 0:
-                if self.log_type == "independent":
-                    print(
-                        f'[QMIX] timestep={timestep} '
-                        f'episode_reward={ind_episode_reward}'
-                    )
-                    ind_episode_reward = {a: 0.0 for a in self.agents}
-                else:
-                    print(
-                        f'[QMIX] timestep={timestep} '
-                        f'episode_reward={episode_reward:.2f}'
-                    )
-                    episode_reward = 0.0
 
             done_dict = {
                 agent: (
@@ -633,6 +647,38 @@ class QMIX:
                 for a, r in rewards.items():
                     ind_episode_reward[a] += r
 
+            if timestep % self.log_interval == 0:
+                if self.log_type == "independent":
+                    print(
+                        f'[QMIX] timestep={timestep} '
+                        f'episode_reward={ind_episode_reward}'
+                    )
+                    if callback:
+                        results = {
+                            "timestep": timestep,
+                            "episode_reward": {
+                                a: ind_episode_reward[a]
+                                for a in self.agents
+                            }
+                        }
+                        callback(results)
+                    writer.writerow([timestep] + [ind_episode_reward[a] for a in self.agents])
+                    ind_episode_reward = {a: 0.0 for a in self.agents}
+                    
+                else:
+                    print(
+                        f'[QMIX] timestep={timestep} '
+                        f'episode_reward={episode_reward:.2f}'
+                    )
+                    if callback:
+                        results = {
+                            "timestep": timestep,
+                            "episode_reward": episode_reward
+                        }
+                        callback(results)
+                    writer.writerow([timestep, episode_reward])
+                    episode_reward = 0.0
+
             # -------- Compute update policy ---------
             if timestep % self.config["buffer"]["capacity"] == 0 and timestep > 0:
 
@@ -645,4 +691,8 @@ class QMIX:
                     for a in self.agents
                 }
 
-            timestep += 1
+            if self.log_type == "independent":
+                desc = 'Timestep:{} Return:{}'.format(timestep, ' '.join('{:0.6f}' for reward in ind_episode_reward.values()).format(*ind_episode_reward.values()))
+            else:
+                desc = 'Timestep:{} Return:{:0.6f}'.format(timestep, episode_reward)
+            iterator.set_description(desc)

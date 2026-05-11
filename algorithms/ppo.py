@@ -3,11 +3,11 @@ import os
 import random
 import string
 import csv
+from tqdm import trange
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.distributions import Categorical, Normal
-from collections import defaultdict
 
 class RolloutBuffer:
     def __init__(self):
@@ -717,7 +717,8 @@ class PPO:
         writer.writerow(header)
         ###################################################
 
-        while timestep < total_timesteps:
+        iterator = trange(total_timesteps)
+        for timestep in iterator:
             # ---------- Evaluation ----------
             '''
             if (self.eval_enabled and timestep % self.eval_interval == 0):
@@ -816,8 +817,9 @@ class PPO:
                             }
                         }
                         callback(results)
-                    ind_episode_reward = {a: 0.0 for a in self.agents}
                     writer.writerow([timestep] + [ind_episode_reward[a] for a in self.agents])
+                    ind_episode_reward = {a: 0.0 for a in self.agents}
+                    
                 else:
                     print(
                         f'[PPO] timestep={timestep} '
@@ -829,8 +831,8 @@ class PPO:
                             "episode_reward": episode_reward
                         }
                         callback(results)
-                    episode_reward = 0.0
                     writer.writerow([timestep, episode_reward])
+                    episode_reward = 0.0
 
             # -------- Compute returns and advantages, then update policy ---------
             if timestep % self.batch_size == 0 and timestep > 0:
@@ -856,7 +858,11 @@ class PPO:
                 self.update()
                 self.buffer.clear()
 
-            timestep += 1
+            if self.log_type == "independent":
+                desc = 'Timestep:{} Return:{}'.format(timestep, ' '.join('{:0.6f}' for reward in ind_episode_reward.values()).format(*ind_episode_reward.values()))
+            else:
+                desc = 'Timestep:{} Return:{:0.6f}'.format(timestep, episode_reward)
+            iterator.set_description(desc)
 
     # ======================================================
     # Evaluation
