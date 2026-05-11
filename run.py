@@ -1,7 +1,5 @@
 import yaml
 import argparse
-from scipy.io import savemat
-
 from utils import make_env
 
 def callback(res):
