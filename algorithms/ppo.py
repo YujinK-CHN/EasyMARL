@@ -305,6 +305,7 @@ class PPO:
         self.entropy_coef = config['training']['entropy_coef']
         self.max_grad_norm = config['training']['max_grad_norm']
         self.centralized_critic = config['algorithm'].get('centralized_critic', False)
+        self.total_timesteps = self.config['training']['total_timesteps']
 
         # ======================================================
         # Evaluation
@@ -670,6 +671,10 @@ class PPO:
                             - self.entropy_coef * entropy_loss
                         )
 
+                        if loss.grad_fn is None:
+                            print(f"[PPO WARNING] {a}: No gradient graph detected. Skipping update.")
+                            return
+
                         optimizer.zero_grad()
                         loss.backward()
 
@@ -683,7 +688,6 @@ class PPO:
     # ======================================================
 
     def train(self, callback=None):
-        total_timesteps = self.config['training']['total_timesteps']
 
         timestep = 0
 
@@ -696,28 +700,29 @@ class PPO:
         self.buffer.clear()
 
         ###################################################
-        # ensure folder exists 
-        os.makedirs("results/PPO", exist_ok=True)
-        # generate unique filename
-        while True:
-            rand_code = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
-            filename = f"results/PPO/ppo_{self.config['env']['name']}_{rand_code}.csv"
-            
-            if not os.path.exists(filename):
-                break  # found unused name
-            
-        # logger
-        log_file = open(filename, "w", newline="")
-        writer = csv.writer(log_file)
+        if self.config['logging']['enabled']:
+            # ensure folder exists 
+            os.makedirs("results/PPO", exist_ok=True)
+            # generate unique filename
+            while True:
+                rand_code = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+                filename = f"results/PPO/ppo_{self.config['env']['name']}_{rand_code}.csv"
+                
+                if not os.path.exists(filename):
+                    break  # found unused name
+                
+            # logger
+            log_file = open(filename, "w", newline="")
+            writer = csv.writer(log_file)
 
-        if self.log_type == "independent":
-            header = ["timestep"] + [f"reward_{a}" for a in self.agents]
-        elif self.log_type in ["mean", "max"]:
-            header = ["timestep", "episode_reward"]
-        writer.writerow(header)
+            if self.log_type == "independent":
+                header = ["timestep"] + [f"reward_{a}" for a in self.agents]
+            elif self.log_type in ["mean", "max"]:
+                header = ["timestep", "episode_reward"]
+            writer.writerow(header)
         ###################################################
 
-        iterator = trange(total_timesteps)
+        iterator = trange(self.total_timesteps)
         for timestep in iterator:
             # ---------- Evaluation ----------
             '''
@@ -817,7 +822,8 @@ class PPO:
                             }
                         }
                         callback(results)
-                    writer.writerow([timestep] + [ind_episode_reward[a] for a in self.agents])
+                    if self.config['logging']['enabled']:
+                        writer.writerow([timestep] + [ind_episode_reward[a] for a in self.agents])
                     ind_episode_reward = {a: 0.0 for a in self.agents}
                     
                 else:
@@ -831,7 +837,8 @@ class PPO:
                             "episode_reward": episode_reward
                         }
                         callback(results)
-                    writer.writerow([timestep, episode_reward])
+                    if self.config['logging']['enabled']:
+                        writer.writerow([timestep, episode_reward])
                     episode_reward = 0.0
 
             # -------- Compute returns and advantages, then update policy ---------

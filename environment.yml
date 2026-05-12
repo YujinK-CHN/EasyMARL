@@ -97,4 +97,3 @@ dependencies:
       - triton==3.6.0
       - typing-extensions==4.15.0
       - urllib3==2.7.0
-prefix: /home/korei/anaconda3/envs/easymarl

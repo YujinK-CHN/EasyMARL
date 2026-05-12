@@ -6,8 +6,10 @@ algorithm:
   name: psro
 
   # Base RL oracle learner
-  oracle_algorithm: dqn
+  oracle_algorithm: ppo
 
+  shared_policy: False
+  centralized_critic: False
 
 # ==========================================================
 # Device
@@ -16,7 +18,6 @@ algorithm:
 device:
   use_cuda: true
   gpu_id: 0
-
 
 # ==========================================================
 # PSRO
@@ -28,16 +29,16 @@ psro:
   iterations: 20
 
   # for each oracle training phase
-  oracle_training_steps: 50000
+  oracle_training_steps: 5000
 
   # Population size limit
-  max_population_size: 20
+  max_population_size: 5
 
   # Meta strategy solver
   meta_solver: fictitious_play
 
   # uniform / latest / meta_strategy
-  opponent_sampling: meta_strategy
+  opponent_sampling: uniform
 
   # Add new oracle only if improvement
   add_only_if_improved: true
@@ -54,37 +55,11 @@ psro:
   # Directory for policies
   population_dir: checkpoints/psro_population
 
-# ==========================================================
-# Population Evaluation
-# ==========================================================
-
-evaluation:
-  enabled: true
-
-  eval_interval: 10000
-
-  eval_episodes: 10
-
   # Build full payoff matrix
   compute_payoff_matrix: true
 
   # Round-robin evaluation
   round_robin: true
-
-# ==========================================================
-# Logging
-# ==========================================================
-
-logging:
-  use_tensorboard: false
-  use_wandb: false
-
-  project_name: EasyMARL-PSRO
-
-  log_interval: 100
-
-  save_model_interval: 50000
-
 
 # ==========================================================
 # Self-Play
