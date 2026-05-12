@@ -5,6 +5,7 @@ from run import load_config
 import torch
 import numpy as np
 from collections import defaultdict
+from itertools import product
 from algorithms.ppo import PPO
 from algorithms.qmix import QMIX
 
@@ -58,11 +59,6 @@ class PSRO:
 
         # each agent has a population of policies
         self.population = {
-            a: [] for a in self.agents
-        }
-
-        # meta strategy distribution
-        self.meta_strategies = {
             a: [] for a in self.agents
         }
 
@@ -136,10 +132,6 @@ class PSRO:
                 )
 
                 self.population[agent].append(initial_policy)
-
-        # initial meta strategy = uniform
-        for agent in self.agents:
-            self.meta_strategies[agent] = [1.0]
     
     def train(self, callback=None):
 
@@ -158,7 +150,7 @@ class PSRO:
             for agent in self.agents:
                 print(f"  {agent} population size: {len(self.population[agent])}")
 
-            opponent_policies, sampled_idx = self.sample_opponents()
+            opponent_policies, sampled_idx = self.sample_opponents(payoff_matrix=payoff_matrix)
 
             print(f"[PSRO] Sampled opponents: {sampled_idx}")
             # --------------------------------------------------
@@ -184,7 +176,7 @@ class PSRO:
     # Sample Opponents
     # ==========================================================
 
-    def sample_opponents(self):
+    def sample_opponents(self, payoff_matrix=None):
 
         sampled = {}
         sampled_idx = {}
@@ -215,11 +207,12 @@ class PSRO:
 
             elif self.opponent_sampling == "meta_strategy":
 
-                probs = self.meta_strategies[agent]
+                meta_strateies = self.compute_meta_strategies(payoff_matrix=payoff_matrix)
+                print(f"[PSRO] Meta strategies: {meta_strateies}")
 
                 idx = np.random.choice(
                     np.arange(pop_size),
-                    p=probs
+                    p=meta_strateies[agent]
                 )
 
             else:
@@ -310,6 +303,8 @@ class PSRO:
                     self.score_history[self.agents[1]].append(0.0)
                 else:
                     self.score_history[self.agents[0]].append(0.0)
+
+                self.prune_population(agent)
                 print(f"[PSRO] Added oracle to population for {agent}.")
 
     def get_payoff_matrix(self, episodes=5):
@@ -337,4 +332,79 @@ class PSRO:
         return payoff_matrix
     
 
+    def compute_meta_strategies(self, payoff_matrix):
+        """
+        Compute PSRO meta-strategies (mixed Nash equilibrium approximation)
+        from a 2-player payoff matrix.
+
+        Args:
+            payoff_matrix: dict
+                {
+                    agent1_name: np.array (n x m),
+                    agent2_name: np.array (n x m)
+                }
+
+        Returns:
+            dict: {
+                agent1_name: np.array (n,),
+                agent2_name: np.array (m,)
+            }
+        """
+
+        A = payoff_matrix[self.agents[0]]
+        B = payoff_matrix[self.agents[1]]
+
+        n, m = A.shape
+
+        # --- helper: compute best response sets ---
+        def best_response_support(payoff_matrix, opponent_dist, axis):
+            expected = payoff_matrix @ opponent_dist if axis == 1 else payoff_matrix.T @ opponent_dist
+            max_val = np.max(expected)
+            support = np.isclose(expected, max_val)
+            return support.astype(float)
+
+        # --- fallback: uniform if degenerate (common early PSRO behavior) ---
+        if np.allclose(A, 0) and np.allclose(B, 0):
+            return {
+                self.agents[0]: np.ones(n) / n,
+                self.agents[1]: np.ones(m) / m
+            }
+
+        # --- compute mixed strategies via simple iterative best-response averaging ---
+        # (stable, widely used in PSRO prototypes)
+
+        p = np.ones(n) / n
+        q = np.ones(m) / m
+
+        lr = 0.1
+        for _ in range(200):  # fixed-point iteration
+            # best response direction for player 1
+            u1 = A @ q
+            p_br = (u1 == np.max(u1)).astype(float)
+            p_br /= p_br.sum()
+
+            # best response direction for player 2
+            u2 = B.T @ p
+            q_br = (u2 == np.max(u2)).astype(float)
+            q_br /= q_br.sum()
+
+            # smooth update (stabilizes training)
+            p = (1 - lr) * p + lr * p_br
+            q = (1 - lr) * q + lr * q_br
+
+            p /= p.sum()
+            q /= q.sum()
+
+        return {
+            self.agents[0]: p,
+            self.agents[1]: q
+        }
     
+    def prune_population(self, agent):
+        if len(self.population[agent]) > self.max_population_size:
+            # remove oldest policy (FIFO)
+            self.population[agent].pop(0)
+
+            # keep score history aligned
+            self.score_history[agent].pop(0)
+            print(f"[PSRO] Pruned population for {agent}. New size: {len(self.population[agent])}")

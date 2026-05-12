@@ -39,7 +39,7 @@ psro:
   meta_solver: fictitious_play
 
   # uniform / latest / meta_strategy
-  opponent_sampling: uniform
+  opponent_sampling: meta_strategy
 
   # Add new oracle only if improvement
   add_only_if_improved: true
