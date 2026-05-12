@@ -79,7 +79,7 @@ exploration:
 # ==========================================================
 
 evaluation:
-  enabled: true
+  enabled: False
 
   eval_interval: 10000
   eval_episodes: 10
@@ -91,6 +91,7 @@ evaluation:
 # ==========================================================
 
 logging:
+  enabled: False
   log_type: "independent"  # "mean" or "max" or "independent"
   log_interval: 512
   save_model_interval: 50000

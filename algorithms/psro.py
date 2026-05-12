@@ -6,6 +6,7 @@ import torch
 import numpy as np
 from collections import defaultdict
 from algorithms.ppo import PPO
+from algorithms.qmix import QMIX
 
 
 # ==========================================================
@@ -77,6 +78,18 @@ class PSRO:
         if oracle_algo.lower() == "ppo":
             self.oracle = PPO(self.config, env)
             self.oracle.total_timesteps = self.oracle_training_steps
+        elif oracle_algo.lower() == "qmix":
+            qmix_config = load_config(
+                f'configs/algos/qmix.yaml')
+            self.config ={
+                **self.config,
+                'model': qmix_config['model'],
+                'mixer': qmix_config['mixer'],
+                'buffer': qmix_config['buffer'],
+                'exploration': qmix_config['exploration']
+            }
+            self.oracle = QMIX(self.config, env)
+            self.oracle.total_timesteps = self.oracle_training_steps
         else:
             raise ValueError(
                 f"Unsupported oracle algorithm: {oracle_algo}"
@@ -112,7 +125,7 @@ class PSRO:
 
         print("[PSRO] Initializing population...")
 
-        if self.oracle.shared:
+        if self.config["algorithm"]["oracle_algorithm"].lower() == "ppo" and self.oracle.shared:
 
             print("[PSRO] cannot work with shared policy.")
 

@@ -162,6 +162,7 @@ class QMIX:
 
         sample_obs = env.reset()[0][self.agents[0]]
         obs_shape = np.array(sample_obs).shape   # (C,H,W)
+        self.total_timesteps = self.config['training']['total_timesteps']
         self.train_step_count = 0
 
         model_cfg = config["model"]
@@ -199,7 +200,7 @@ class QMIX:
         # --------------------------------------------------
         # Agent networks
         # --------------------------------------------------
-        self.agents_net = nn.ModuleDict({
+        self.policies = nn.ModuleDict({
             a: RNNAgent(
                 obs_shape,
                 n_actions,
@@ -208,7 +209,7 @@ class QMIX:
             for a in self.agents
         })
 
-        self.target_agents_net = nn.ModuleDict({
+        self.target_policies = nn.ModuleDict({
             a: RNNAgent(
                 obs_shape,
                 n_actions,
@@ -219,7 +220,7 @@ class QMIX:
 
         # copy weights
         for a in self.agents:
-            self.target_agents_net[a].load_state_dict(self.agents_net[a].state_dict())
+            self.target_policies[a].load_state_dict(self.policies[a].state_dict())
 
         # --------------------------------------------------
         # Mixer
@@ -244,7 +245,7 @@ class QMIX:
         # Optimizer
         # --------------------------------------------------
         self.params = list(self.mixer.parameters())
-        for net in self.agents_net.values():
+        for net in self.policies.values():
             self.params += list(net.parameters())
 
         self.optimizer = optim.Adam(self.params, lr=train_cfg["learning_rate"])
@@ -317,7 +318,7 @@ class QMIX:
             # add batch and sequence dimensions
             obs_t = obs_t.unsqueeze(0).unsqueeze(0)
 
-            q, h = self.agents_net[a](obs_t, hidden_states[a])
+            q, h = self.policies[a](obs_t, hidden_states[a])
 
             q = q.squeeze(0).squeeze(0)
 
@@ -430,8 +431,8 @@ class QMIX:
 
         for i, agent in enumerate(self.agents):
 
-            agent_net = self.agents_net[agent]
-            target_agent_net = self.target_agents_net[agent]
+            agent_net = self.policies[agent]
+            target_agent_net = self.target_policies[agent]
 
             # ------------------------------------------------
             # Hidden states
@@ -540,6 +541,16 @@ class QMIX:
 
         loss.backward()
 
+        for agent in self.agents:
+            agent_net = self.policies[agent]
+            no_grad = not any(
+                param.grad is not None
+                for param in agent_net.parameters()
+            )
+            if no_grad:
+                print(f"[QMIX WARNING] {agent}: No gradients detected.")
+
+
         torch.nn.utils.clip_grad_norm_(
             self.mixer.parameters(),
             self.config["training"]["grad_norm_clip"]
@@ -547,7 +558,7 @@ class QMIX:
 
         for a in self.agents:
             torch.nn.utils.clip_grad_norm_(
-                self.agents_net[a].parameters(),
+                self.policies[a].parameters(),
                 self.config["training"]["grad_norm_clip"]
             )
 
@@ -564,8 +575,8 @@ class QMIX:
             )
 
             for a in self.agents:
-                self.target_agents_net[a].load_state_dict(
-                    self.agents_net[a].state_dict()
+                self.target_policies[a].load_state_dict(
+                    self.policies[a].state_dict()
                 )
 
         self.train_step_count += 1
@@ -575,7 +586,6 @@ class QMIX:
     # ======================================================
 
     def train(self, callback=None):
-        total_timesteps = self.config['training']['total_timesteps']
 
         timestep = 0
 
@@ -588,33 +598,34 @@ class QMIX:
         self.buffer.clear()
 
         hidden = {
-            a: self.agents_net[a].init_hidden(1)
+            a: self.policies[a].init_hidden(1)
             for a in self.agents
         }
 
         ###################################################
-        # ensure folder exists 
-        os.makedirs("results/QMIX", exist_ok=True)
-        # generate unique filename
-        while True:
-            rand_code = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
-            filename = f"results/QMIX/qmix_{self.config['env']['name']}_{rand_code}.csv"
-            
-            if not os.path.exists(filename):
-                break  # found unused name
-            
-        # logger
-        log_file = open(filename, "w", newline="")
-        writer = csv.writer(log_file)
+        if self.config['logging']['enabled']:
+            # ensure folder exists 
+            os.makedirs("results/QMIX", exist_ok=True)
+            # generate unique filename
+            while True:
+                rand_code = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+                filename = f"results/QMIX/qmix_{self.config['env']['name']}_{rand_code}.csv"
+                
+                if not os.path.exists(filename):
+                    break  # found unused name
+                
+            # logger
+            log_file = open(filename, "w", newline="")
+            writer = csv.writer(log_file)
 
-        if self.log_type == "independent":
-            header = ["timestep"] + [f"reward_{a}" for a in self.agents]
-        elif self.log_type in ["mean", "max"]:
-            header = ["timestep", "episode_reward"]
-        writer.writerow(header)
+            if self.log_type == "independent":
+                header = ["timestep"] + [f"reward_{a}" for a in self.agents]
+            elif self.log_type in ["mean", "max"]:
+                header = ["timestep", "episode_reward"]
+            writer.writerow(header)
         ###################################################
 
-        iterator = trange(total_timesteps)
+        iterator = trange(self.total_timesteps)
         for timestep in iterator:
 
             actions, hidden = self.select_actions(observations, hidden)
@@ -662,7 +673,8 @@ class QMIX:
                             }
                         }
                         callback(results)
-                    writer.writerow([timestep] + [ind_episode_reward[a] for a in self.agents])
+                    if self.config['logging']['enabled']:
+                        writer.writerow([timestep] + [ind_episode_reward[a] for a in self.agents])
                     ind_episode_reward = {a: 0.0 for a in self.agents}
                     
                 else:
@@ -676,7 +688,8 @@ class QMIX:
                             "episode_reward": episode_reward
                         }
                         callback(results)
-                    writer.writerow([timestep, episode_reward])
+                    if self.config['logging']['enabled']:
+                        writer.writerow([timestep, episode_reward])
                     episode_reward = 0.0
 
             # -------- Compute update policy ---------
@@ -687,7 +700,7 @@ class QMIX:
                 self.buffer.clear()
 
                 hidden = {
-                    a: self.agents_net[a].init_hidden(1)
+                    a: self.policies[a].init_hidden(1)
                     for a in self.agents
                 }
 
