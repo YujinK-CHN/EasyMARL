@@ -879,6 +879,9 @@ class PPO:
         rewards = []
         mean_rewards = {}
 
+        for policy in self.policies.values():
+            policy.eval()  # important if using nn.Module
+
         for _ in range(episodes):
             observations, infos = self.env.reset()
 
@@ -940,7 +943,10 @@ class PPO:
         for a in self.agents:
             score = np.mean([ep[a] for ep in rewards])
             mean_rewards[a] = score
+
         print(f'[Evaluation] mean_rewards={mean_rewards}')
+        for policy in self.policies.values():
+            policy.train()  # important if using nn.Module
         return mean_rewards
     
     def build_global_obs(self, obs_dict):

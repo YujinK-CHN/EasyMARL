@@ -82,7 +82,7 @@ evaluation:
   enabled: False
 
   eval_interval: 10000
-  eval_episodes: 10
+  eval_episodes: 5
 
   deterministic: true
 

@@ -719,57 +719,67 @@ class QMIX:
         rewards = []
         mean_rewards = {}
 
+        for policy in self.policies.values():
+            policy.eval()
+
         for _ in range(episodes):
             observations, infos = self.env.reset()
 
             done = False
-            ind_episode_reward = {a: 0.0 for a in self.agents}
+            episode_reward = {a: 0.0 for a in self.agents}
+
+            # ✅ INIT HIDDEN STATE (IMPORTANT FIX)
+            hidden = {
+                a: self.policies[a].init_hidden(1).to(self.device)
+                for a in self.agents
+            }
 
             while not done:
                 actions = {}
 
                 with torch.no_grad():
-
                     for agent, obs in observations.items():
 
                         obs_tensor = (
                             torch.FloatTensor(obs)
                             .unsqueeze(0)
+                            .unsqueeze(0)
                             .to(self.device)
                         )
 
-                        # -----------------------------
-                        # choose correct policy
-                        # -----------------------------
                         policy = self.policies[agent]
 
-                        # -----------------------------
-                        # action selection
-                        # -----------------------------
-                        if self.action_space_type == 'discrete':
-                            action = torch.argmax(
-                                dist.logits,
-                                dim=-1
-                            ).item()
+                        # ✅ FIX: pass hidden state
+                        q_values, h = policy(obs_tensor, hidden[agent])
+
+                        q_values = q_values.squeeze(0).squeeze(0)
+
+                        action = torch.argmax(q_values, dim=-1).item()
 
                         actions[agent] = action
 
-                #print(actions)
+                        # ✅ update hidden state
+                        hidden[agent] = h
+
                 observations, reward, terminations, truncations, infos = \
                     self.env.step(actions)
 
                 for a, r in reward.items():
-                    ind_episode_reward[a] += r
+                    episode_reward[a] += r
 
                 done = all(
                     terminations[a] or truncations[a]
-                    for a in observations.keys()
+                    for a in terminations.keys()
                 )
 
-            rewards.append(ind_episode_reward)
+            rewards.append(episode_reward)
 
         for a in self.agents:
-            score = np.mean([ep[a] for ep in rewards])
-            mean_rewards[a] = score
-        print(f'[Evaluation] mean_rewards={mean_rewards}')
+            mean_rewards[a] = np.mean([ep[a] for ep in rewards])
+
+        print(f"[Evaluation] mean_rewards={mean_rewards}")
+
+        for policy in self.policies.values():
+            policy.train()
+
         return mean_rewards
