@@ -173,13 +173,13 @@ class QMIX:
         act_space = env.action_space(self.agents[0])
 
         if hasattr(act_space, "n"):
-            action_space_type = "discrete"
+            self.action_space_type = "discrete"
             n_actions = act_space.n
         else:
             action_space_type = "continuous"
             n_actions = act_space.shape[0]
 
-        print(f'Action space type: {action_space_type}, act_dim: {n_actions}')
+        print(f'Action space type: {self.action_space_type}, act_dim: {n_actions}')
 
         # ======================================================
         # Evaluation
@@ -709,3 +709,67 @@ class QMIX:
             else:
                 desc = 'Timestep:{} Return:{:0.6f}'.format(timestep, episode_reward)
             iterator.set_description(desc)
+
+    
+    # ======================================================
+    # Evaluation
+    # ======================================================
+
+    def evaluate(self, episodes=5):
+        rewards = []
+        mean_rewards = {}
+
+        for _ in range(episodes):
+            observations, infos = self.env.reset()
+
+            done = False
+            ind_episode_reward = {a: 0.0 for a in self.agents}
+
+            while not done:
+                actions = {}
+
+                with torch.no_grad():
+
+                    for agent, obs in observations.items():
+
+                        obs_tensor = (
+                            torch.FloatTensor(obs)
+                            .unsqueeze(0)
+                            .to(self.device)
+                        )
+
+                        # -----------------------------
+                        # choose correct policy
+                        # -----------------------------
+                        policy = self.policies[agent]
+
+                        # -----------------------------
+                        # action selection
+                        # -----------------------------
+                        if self.action_space_type == 'discrete':
+                            action = torch.argmax(
+                                dist.logits,
+                                dim=-1
+                            ).item()
+
+                        actions[agent] = action
+
+                #print(actions)
+                observations, reward, terminations, truncations, infos = \
+                    self.env.step(actions)
+
+                for a, r in reward.items():
+                    ind_episode_reward[a] += r
+
+                done = all(
+                    terminations[a] or truncations[a]
+                    for a in observations.keys()
+                )
+
+            rewards.append(ind_episode_reward)
+
+        for a in self.agents:
+            score = np.mean([ep[a] for ep in rewards])
+            mean_rewards[a] = score
+        print(f'[Evaluation] mean_rewards={mean_rewards}')
+        return mean_rewards

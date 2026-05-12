@@ -6,7 +6,7 @@ algorithm:
   name: psro
 
   # Base RL oracle learner
-  oracle_algorithm: qmix
+  oracle_algorithm: ppo
   # For PPO oracle: it only works with independent policies (shared_policy=False)
 
   shared_policy: False

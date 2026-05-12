@@ -50,6 +50,7 @@ class PSRO:
         self.score_history = {
             a: [0.0] for a in self.agents
         }
+        self.eval_episodes = config["evaluation"]["eval_episodes"]
 
         # ======================================================
         # Population
@@ -64,9 +65,6 @@ class PSRO:
         self.meta_strategies = {
             a: [] for a in self.agents
         }
-
-        # payoff matrix
-        self.payoff_matrix = defaultdict(dict)
 
         # ======================================================
         # Oracle learner
@@ -150,6 +148,9 @@ class PSRO:
         for iteration in range(self.iterations):
 
             print(f"\n[PSRO] Iteration {iteration}")
+
+            payoff_matrix = self.get_payoff_matrix(self.eval_episodes)
+            print(f"[PSRO] Payoff matrix:\n{payoff_matrix}")
 
             # --------------------------------------------------
             # Sample opponents
@@ -310,6 +311,30 @@ class PSRO:
                 else:
                     self.score_history[self.agents[0]].append(0.0)
                 print(f"[PSRO] Added oracle to population for {agent}.")
+
+    def get_payoff_matrix(self, episodes=5):
+
+        pop0 = self.population[self.agents[0]]
+        pop1 = self.population[self.agents[1]]
+
+        payoff_matrix = {agent: np.zeros((len(pop0), len(pop1))) for agent in self.agents}
+
+        for i, policy0 in enumerate(pop0):
+
+            for j, policy1 in enumerate(pop1):
+
+                # load policies
+                self.oracle.policies[self.agents[0]].load_state_dict(policy0)
+                self.oracle.policies[self.agents[1]].load_state_dict(policy1)
+
+                # evaluate matchup
+                rewards = self.oracle.evaluate(episodes=episodes)
+
+                # store payoff
+                payoff_matrix[self.agents[0]][i, j] = rewards[self.agents[0]]
+                payoff_matrix[self.agents[1]][i, j] = rewards[self.agents[1]]
+
+        return payoff_matrix
     
 
     

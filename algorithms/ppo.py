@@ -877,12 +877,13 @@ class PPO:
 
     def evaluate(self, episodes=5):
         rewards = []
+        mean_rewards = {}
 
         for _ in range(episodes):
             observations, infos = self.env.reset()
 
             done = False
-            episode_reward = 0.0
+            ind_episode_reward = {a: 0.0 for a in self.agents}
 
             while not done:
                 actions = {}
@@ -922,19 +923,25 @@ class PPO:
 
                         actions[agent] = action
 
+                #print(actions)
                 observations, reward, terminations, truncations, infos = \
                     self.env.step(actions)
 
-                episode_reward += sum(reward.values())
+                for a, r in reward.items():
+                    ind_episode_reward[a] += r
 
                 done = all(
                     terminations[a] or truncations[a]
                     for a in observations.keys()
                 )
 
-            rewards.append(episode_reward)
+            rewards.append(ind_episode_reward)
 
-        return np.mean(rewards)
+        for a in self.agents:
+            score = np.mean([ep[a] for ep in rewards])
+            mean_rewards[a] = score
+        print(f'[Evaluation] mean_rewards={mean_rewards}')
+        return mean_rewards
     
     def build_global_obs(self, obs_dict):
 
