@@ -39,9 +39,6 @@ buffer:
 
   capacity: 1024
 
-  # entire episode sequences
-  batch_size: 128
-
   burn_in_steps: 0
 
 # ==========================================================
@@ -64,6 +61,10 @@ training:
   train_interval: 1
 
   learner_updates_per_step: 1
+
+  train_epochs: 10  # For PPO-style multiple epochs per update
+
+  mini_batch_size: 128
 
 # ==========================================================
 # Exploration
@@ -91,8 +92,8 @@ evaluation:
 # ==========================================================
 
 logging:
-  enabled: False
-  log_type: "independent"  # "mean" or "max" or "independent"
+  enabled: True
+  log_type: "mean"  # "mean" or "max" or "independent"
   log_interval: 512
   save_model_interval: 50000
 

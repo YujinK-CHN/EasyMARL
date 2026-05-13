@@ -259,7 +259,8 @@ class QMIX:
         # Training config
         # --------------------------------------------------
         self.gamma = train_cfg["gamma"]
-        self.batch_size = config["buffer"]["batch_size"]
+        self.train_epochs = train_cfg.get("train_epochs", 1)
+        self.mini_batch_size = train_cfg["mini_batch_size"]
         self.target_update_interval = train_cfg["target_update_interval"]
 
         # --------------------------------------------------
@@ -360,226 +361,147 @@ class QMIX:
         device = self.device
         gamma = self.config["training"]["gamma"]
 
-        # ============================================================
-        # Build batch tensors
-        # ============================================================
-
         T = len(self.buffer.obs)
-        n_agents = len(self.agents)
 
-        obs_batch = []
-        next_obs_batch = []
-        action_batch = []
-        reward_batch = []
-        done_batch = []
+        # ============================================================
+        # Build dataset (same as PPO rollout flattening)
+        # ============================================================
+        obs_batch, next_obs_batch = [], []
+        action_batch, reward_batch, done_batch = [], [], []
 
         for t in range(T):
 
-            obs_t = []
-            next_obs_t = []
-            actions_t = []
+            obs_t, next_obs_t, act_t = [], [], []
 
             for a in self.agents:
                 obs_t.append(self.buffer.obs[t][a])
 
-                # next obs
                 if t < T - 1:
                     next_obs_t.append(self.buffer.obs[t + 1][a])
                 else:
                     next_obs_t.append(self.buffer.obs[t][a])
 
-                actions_t.append(self.buffer.actions[t][a])
+                act_t.append(self.buffer.actions[t][a])
 
-            # use mean team reward
             reward = np.mean(list(self.buffer.rewards[t].values()))
-
-            # episode done if all agents done
             done = float(all(self.buffer.dones[t].values()))
 
             obs_batch.append(obs_t)
             next_obs_batch.append(next_obs_t)
-            action_batch.append(actions_t)
+            action_batch.append(act_t)
             reward_batch.append(reward)
             done_batch.append(done)
 
-        obs_batch = torch.FloatTensor(
-            np.array(obs_batch)
-        ).to(device)                           # [T, n_agents, obs_dim]
+        obs_batch = torch.FloatTensor(np.array(obs_batch)).to(device)
+        next_obs_batch = torch.FloatTensor(np.array(next_obs_batch)).to(device)
+        action_batch = torch.LongTensor(np.array(action_batch)).to(device)
+        reward_batch = torch.FloatTensor(np.array(reward_batch)).to(device)
+        done_batch = torch.FloatTensor(np.array(done_batch)).to(device)
 
-        next_obs_batch = torch.FloatTensor(
-            np.array(next_obs_batch)
-        ).to(device)
-
-        action_batch = torch.LongTensor(
-            np.array(action_batch)
-        ).to(device)                           # [T, n_agents]
-
-        reward_batch = torch.FloatTensor(
-            np.array(reward_batch)
-        ).to(device)                           # [T]
-
-        done_batch = torch.FloatTensor(
-            np.array(done_batch)
-        ).to(device)                           # [T]
+        dataset_size = T
 
         # ============================================================
-        # Per-agent Q-values
+        # PPO-style QMIX optimization loop
         # ============================================================
+        for epoch in range(self.train_epochs):
 
-        chosen_action_qvals = []
-        target_max_qvals = []
+            indices = np.random.permutation(dataset_size)
 
-        for i, agent in enumerate(self.agents):
+            for start in range(0, dataset_size, self.mini_batch_size):
 
-            agent_net = self.policies[agent]
-            target_agent_net = self.target_policies[agent]
+                end = start + self.mini_batch_size
+                mb_idx = indices[start:end]
 
-            # ------------------------------------------------
-            # Hidden states
-            # ------------------------------------------------
+                mb_obs = obs_batch[mb_idx]
+                mb_next_obs = next_obs_batch[mb_idx]
+                mb_actions = action_batch[mb_idx]
+                mb_rewards = reward_batch[mb_idx]
+                mb_dones = done_batch[mb_idx]
 
-            hidden = agent_net.init_hidden(1).to(device)
-            target_hidden = target_agent_net.init_hidden(1).to(device)
+                chosen_qvals = []
+                target_qvals = []
 
-            # ------------------------------------------------
-            # Inputs
-            # QMIX RNN expects:
-            # [batch, time, obs_dim]
-            # ------------------------------------------------
+                # ====================================================
+                # Per-agent Q computation
+                # ====================================================
+                for i, agent in enumerate(self.agents):
 
-            agent_obs = obs_batch[:, i].unsqueeze(0)
-            target_obs = next_obs_batch[:, i].unsqueeze(0)
+                    policy = self.policies[agent]
+                    target_policy = self.target_policies[agent]
 
-            # Shapes:
-            # [1, T, obs_dim]
+                    hidden = policy.init_hidden(1).to(device)
+                    target_hidden = target_policy.init_hidden(1).to(device)
 
-            # ------------------------------------------------
-            # Forward pass
-            # ------------------------------------------------
+                    q, _ = policy(mb_obs[:, i].unsqueeze(0), hidden)
+                    q_next, _ = target_policy(mb_next_obs[:, i].unsqueeze(0), target_hidden)
 
-            q_values, _ = agent_net(agent_obs, hidden)
-            target_q_values, _ = target_agent_net(
-                target_obs,
-                target_hidden
-            )
+                    q = q.squeeze(0)
+                    q_next = q_next.squeeze(0)
 
-            # Remove batch dimension
-            # [1, T, n_actions] -> [T, n_actions]
+                    chosen_q = torch.gather(
+                        q,
+                        1,
+                        mb_actions[:, i].unsqueeze(1)
+                    ).squeeze(1)
 
-            q_values = q_values.squeeze(0)
-            target_q_values = target_q_values.squeeze(0)
+                    max_q_next = q_next.max(dim=1)[0]
 
-            # ------------------------------------------------
-            # Chosen Q-values
-            # ------------------------------------------------
+                    chosen_qvals.append(chosen_q)
+                    target_qvals.append(max_q_next)
 
-            chosen_q = torch.gather(
-                q_values,
-                dim=1,
-                index=action_batch[:, i].unsqueeze(1)
-            ).squeeze(1)
+                chosen_qvals = torch.stack(chosen_qvals, dim=1)
+                target_qvals = torch.stack(target_qvals, dim=1)
 
-            # ------------------------------------------------
-            # Target max Q-values
-            # ------------------------------------------------
+                # ====================================================
+                # QMIX mixing
+                # ====================================================
+                global_state = mb_obs.reshape(len(mb_idx), -1)
+                next_global_state = mb_next_obs.reshape(len(mb_idx), -1)
 
-            target_max_q = target_q_values.max(dim=1)[0]
+                mixed_q = self.mixer(chosen_qvals, global_state).squeeze(-1)
 
-            chosen_action_qvals.append(chosen_q)
-            target_max_qvals.append(target_max_q)
+                with torch.no_grad():
+                    target_mixed_q = self.target_mixer(
+                        target_qvals,
+                        next_global_state
+                    ).squeeze(-1)
 
-        # [T, n_agents]
-        chosen_action_qvals = torch.stack(
-            chosen_action_qvals,
-            dim=1
-        )
+                    targets = mb_rewards + gamma * (1.0 - mb_dones) * target_mixed_q
 
-        target_max_qvals = torch.stack(
-            target_max_qvals,
-            dim=1
-        )
+                loss = F.mse_loss(mixed_q, targets)
 
-        # ============================================================
-        # Global state for mixer
-        # ============================================================
+                # ====================================================
+                # Optimization step (PPO-style minibatch update)
+                # ====================================================
+                self.optimizer.zero_grad()
+                loss.backward()
 
-        global_states = obs_batch.reshape(T, -1)
-        next_global_states = next_obs_batch.reshape(T, -1)
-
-        # ============================================================
-        # Mixing network
-        # ============================================================
-
-        mixed_q = self.mixer(
-            chosen_action_qvals,
-            global_states
-        ).squeeze(-1)
-
-        with torch.no_grad():
-
-            target_mixed_q = self.target_mixer(
-                target_max_qvals,
-                next_global_states
-            ).squeeze(-1)
-
-            targets = (
-                reward_batch
-                + gamma * (1.0 - done_batch) * target_mixed_q
-            )
-
-        # ============================================================
-        # Loss
-        # ============================================================
-
-        loss = F.mse_loss(mixed_q, targets)
-
-        # ============================================================
-        # Optimize
-        # ============================================================
-
-        self.optimizer.zero_grad()
-
-        loss.backward()
-
-        for agent in self.agents:
-            agent_net = self.policies[agent]
-            no_grad = not any(
-                param.grad is not None
-                for param in agent_net.parameters()
-            )
-            if no_grad:
-                print(f"[QMIX WARNING] {agent}: No gradients detected.")
-
-
-        torch.nn.utils.clip_grad_norm_(
-            self.mixer.parameters(),
-            self.config["training"]["grad_norm_clip"]
-        )
-
-        for a in self.agents:
-            torch.nn.utils.clip_grad_norm_(
-                self.policies[a].parameters(),
-                self.config["training"]["grad_norm_clip"]
-            )
-
-        self.optimizer.step()
-
-        # ============================================================
-        # Target update
-        # ============================================================
-
-        if self.train_step_count % self.target_update_interval == 0:
-
-            self.target_mixer.load_state_dict(
-                self.mixer.state_dict()
-            )
-
-            for a in self.agents:
-                self.target_policies[a].load_state_dict(
-                    self.policies[a].state_dict()
+                torch.nn.utils.clip_grad_norm_(
+                    self.mixer.parameters(),
+                    self.config["training"]["grad_norm_clip"]
                 )
 
-        self.train_step_count += 1
+                for a in self.agents:
+                    torch.nn.utils.clip_grad_norm_(
+                        self.policies[a].parameters(),
+                        self.config["training"]["grad_norm_clip"]
+                    )
+
+                self.optimizer.step()
+
+                # ============================================================
+                # Target network update (IMPORTANT: keep outside epochs loop)
+                # ============================================================
+                if self.train_step_count % self.target_update_interval == 0:
+
+                    self.target_mixer.load_state_dict(self.mixer.state_dict())
+
+                    for a in self.agents:
+                        self.target_policies[a].load_state_dict(
+                            self.policies[a].state_dict()
+                        )
+
+                self.train_step_count += 1
 
     # ======================================================
     # Main training loop (PettingZoo parallel)
@@ -728,7 +650,6 @@ class QMIX:
             done = False
             episode_reward = {a: 0.0 for a in self.agents}
 
-            # ✅ INIT HIDDEN STATE (IMPORTANT FIX)
             hidden = {
                 a: self.policies[a].init_hidden(1).to(self.device)
                 for a in self.agents
