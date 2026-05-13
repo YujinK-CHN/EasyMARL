@@ -306,6 +306,7 @@ class PPO:
         self.max_grad_norm = config['training']['max_grad_norm']
         self.centralized_critic = config['algorithm'].get('centralized_critic', False)
         self.total_timesteps = self.config['training']['total_timesteps']
+        self.freeze_one_agent = self.config['training'].get('freeze_one_agent', False)
 
         # ======================================================
         # Evaluation
@@ -319,6 +320,7 @@ class PPO:
         # Logging
         # ======================================================
 
+        self.rand_code = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
         self.log_type = config['logging']['log_type']
         self.log_interval = config['logging']['log_interval']
         self.save_model_interval = config['logging']['save_model_interval']
@@ -385,6 +387,11 @@ class PPO:
                     net = ActorCritic(obs_shape, self.act_dim, encoder(), action_space=action_space_type).to(self.device)
                 self.policies[a] = net
                 self.optimizers[a] = optim.Adam(net.parameters(), lr=lr)
+
+            if self.freeze_one_agent:
+                # Freeze agent_1's policy (treat as part of environment)
+                for p in self.policies[self.agents[1]].parameters():
+                    p.requires_grad = False
 
     # ------------------------------------------------------
 
@@ -705,8 +712,8 @@ class PPO:
             os.makedirs("results/PPO", exist_ok=True)
             # generate unique filename
             while True:
-                rand_code = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
-                filename = f"results/PPO/ppo_{self.config['env']['name']}_{rand_code}.csv"
+                
+                filename = f"results/PPO/ppo_{self.config['env']['name']}_{self.rand_code}.csv"
                 
                 if not os.path.exists(filename):
                     break  # found unused name
@@ -741,15 +748,16 @@ class PPO:
             # --------------------------------
 
             # -------- Checkpointing ---------
-            '''
-            if timestep % self.save_model_interval == 0 and timestep > 0:
+            ''''''
+            if self.config['logging']['enable_saving'] and \
+                timestep % self.save_model_interval == 0 and timestep > 0:
 
-                self.save(
-                    f'checkpoints/checkpoint_{timestep}.pt'
-                )
-
+                for a, policy in self.policies.items():
+                    self.save(
+                        f'checkpoints/{self.config["algorithm"]["name"]}_{{self.config["env"]["name"]}}_{self.rand_code}/learner_{timestep}.pt'
+                    )
                 print(f'[Checkpoint] saved at timestep={timestep}')
-            '''
+            
             # --------------------------------
 
             if self.centralized_critic:
@@ -984,34 +992,15 @@ class PPO:
             }, path)
 
         else:
+            if self.freeze_one_agent:
+                # Only save the learnable agent's policy
+                learning_agent = self.agents[0]  # assuming agent_0 is learnable
+                torch.save(self.policies[learning_agent].state_dict(), path)
+            else:
+                torch.save({
+                    'models': {
+                        a: self.policies[a].state_dict()
+                        for a in self.agents
+                    }
+                }, path)
 
-            torch.save({
-                'models': {
-                    a: self.policies[a].state_dict()
-                    for a in self.agents
-                },
-                'optimizers': {
-                    a: self.optimizers[a].state_dict()
-                    for a in self.agents
-                }
-            }, path)
-
-    def load(self, path):
-
-        checkpoint = torch.load(path, map_location=self.device)
-
-        if self.shared:
-
-            self.policy.load_state_dict(checkpoint['model'])
-            self.optimizer.load_state_dict(checkpoint['optimizer'])
-
-        else:
-
-            for a in self.agents:
-                self.policies[a].load_state_dict(
-                    checkpoint['models'][a]
-                )
-
-                self.optimizers[a].load_state_dict(
-                    checkpoint['optimizers'][a]
-                )

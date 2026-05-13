@@ -5,3 +5,7 @@ sudo apt install swig
 pip install pettingzoo['all']
 pip install pyyaml
 pip install tqdm
+pip install matplotlib
+pip install pandas
+pip install autorom
+AutoROM --accept-license

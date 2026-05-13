@@ -31,12 +31,19 @@ training:
   value_loss_coef: 0.5
   max_grad_norm: 0.5
 
+  freeze_one_agent: True
+  # For PSRO oracle training, no affected by freeze_one_agent since we manually control which agent to train in PSRO loop
+  # For example, boxing env, if freeze_one_agent=True, then PPO will only update agent_0's policy, treating agent_1 as part 
+  # of the environment. This can help stabilize training when the opponent is also learning. 
+  # If freeze_one_agent=False, then PPO will update both agents' policies simultaneously, 
+  #which can lead to non-stationarity and instability in training.
+
 # ==========================================================
 # Evaluation
 # ==========================================================
 
 evaluation:
-  enabled: true
+  enabled: False
   eval_interval: 10000
   eval_episodes: 5
 
@@ -48,7 +55,8 @@ logging:
   enabled: False
   log_type: "independent" # "mean" or "max" or "independent"
   log_interval: 512
-  save_model_interval: 50000
+  enable_saving: True # set "False" for PSRO, since PSRO has its own population saving mechanism.
+  save_model_interval: 5000
 
 # ==========================================================
 # Device

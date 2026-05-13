@@ -193,6 +193,7 @@ class QMIX:
         # Logging
         # ======================================================
 
+        self.rand_code = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
         self.log_type = config['logging']['log_type']
         self.log_interval = config['logging']['log_interval']
         self.save_model_interval = config['logging']['save_model_interval']
@@ -530,8 +531,8 @@ class QMIX:
             os.makedirs("results/QMIX", exist_ok=True)
             # generate unique filename
             while True:
-                rand_code = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
-                filename = f"results/QMIX/qmix_{self.config['env']['name']}_{rand_code}.csv"
+                
+                filename = f"results/QMIX/qmix_{self.config['env']['name']}_{self.rand_code}.csv"
                 
                 if not os.path.exists(filename):
                     break  # found unused name
@@ -549,6 +550,19 @@ class QMIX:
 
         iterator = trange(self.total_timesteps)
         for timestep in iterator:
+
+            # -------- Checkpointing ---------
+            ''''''
+            if self.config['logging']['enable_saving'] and \
+                timestep % self.save_model_interval == 0 and timestep > 0:
+
+                for a, policy in self.policies.items():
+                    self.save(
+                        f'checkpoints/{self.config["algorithm"]["name"]}_{{self.config["env"]["name"]}}_{self.rand_code}/learner_{timestep}.pt'
+                    )
+                print(f'[Checkpoint] saved at timestep={timestep}')
+            
+            # --------------------------------
 
             actions, hidden = self.select_actions(observations, hidden)
 
@@ -704,3 +718,17 @@ class QMIX:
             policy.train()
 
         return mean_rewards
+    
+    def save(self, path):
+
+        if self.freeze_one_agent:
+            # Only save the learnable agent's policy
+            learning_agent = self.agents[0]  # assuming agent_0 is learnable
+            torch.save(self.policies[learning_agent].state_dict(), path)
+        else:
+            torch.save({
+                'models': {
+                    a: self.policies[a].state_dict()
+                    for a in self.agents
+                }
+            }, path)
