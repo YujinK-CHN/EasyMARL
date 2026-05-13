@@ -747,20 +747,6 @@ class PPO:
             '''
             # --------------------------------
 
-            # -------- Checkpointing ---------
-            ''''''
-            if self.config['logging']['enable_saving'] and \
-                timestep % self.save_model_interval == 0 and timestep > 0:
-
-                path = f'checkpoints/{self.config["algorithm"]["name"]}_{self.config["env"]["name"]}_{self.rand_code}'
-                os.makedirs(path, exist_ok=True)
-
-                self.save(path = path + f'/agents_t{timestep}.pth')
-                
-                print(f'[Checkpoint] saved at timestep={timestep}')
-            
-            # --------------------------------
-
             if self.centralized_critic:
                 global_obs = torch.tensor(
                     self.build_global_obs(observations),
@@ -879,6 +865,20 @@ class PPO:
             else:
                 desc = 'Timestep:{} Return:{:0.6f}'.format(timestep, episode_reward)
             iterator.set_description(desc)
+
+            # -------- Checkpointing ---------
+            ''''''
+            if self.config['logging']['enable_saving'] and \
+                timestep % self.save_model_interval == 0 and timestep > 0:
+
+                path = f'checkpoints/{self.config["algorithm"]["name"]}_{self.config["env"]["name"]}_{self.rand_code}'
+                os.makedirs(path, exist_ok=True)
+
+                self.save(path = path + f'/agents_t{timestep}.pth')
+                
+                print(f'[Checkpoint] saved at timestep={timestep}')
+            
+            # --------------------------------
 
     # ======================================================
     # Evaluation

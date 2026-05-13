@@ -30,7 +30,7 @@ psro:
   iterations: 20
 
   # for each oracle training phase
-  oracle_training_steps: 5000
+  oracle_training_steps: 50000
 
   # Population size limit
   max_population_size: 5
@@ -39,28 +39,16 @@ psro:
   meta_solver: fictitious_play
 
   # uniform / latest / meta_strategy
-  opponent_sampling: meta_strategy
+  response_sampling: meta_strategy
 
   # Add new oracle only if improvement
   add_only_if_improved: true
 
-  # Evaluate against entire population
-  evaluate_full_population: true
-
   # Payoff discounting
   payoff_gamma: 1.0
 
-  # Save each new oracle
-  save_population: true
-
-  # Directory for policies
-  population_dir: checkpoints/psro_population
-
-  # Build full payoff matrix
-  compute_payoff_matrix: true
-
-  # Round-robin evaluation
-  round_robin: true
+  # Round-robin evaluation (Haven't implemented yet, so set to False)
+  round_robin: False 
 
 # ==========================================================
 # Self-Play
@@ -74,14 +62,24 @@ self_play:
   # Probability of random population sampling
   population_sampling_prob: 0.7
 
+
 # ==========================================================
-# Replay / Opponent Pool
+# PSRO logging
 # ==========================================================
+psro_logging:
 
-opponent_pool:
+  enabled: True
 
-  enabled: true
+  # per PSRO iteration
+  log_interval: 1 
 
-  max_size: 50
+  save_population_interval: 5
 
-  sample_strategy: uniform
+# ==========================================================
+# PSRO evaluation
+# ==========================================================
+psro_evaluation:
+  # Save each new oracle
+  enabled: True
+  
+  eval_episodes: 5

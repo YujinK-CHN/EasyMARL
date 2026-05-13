@@ -1,6 +1,8 @@
 import os
 import copy
 import random
+import csv
+from tomlkit import string
 from run import load_config
 import torch
 import numpy as np
@@ -35,23 +37,25 @@ class PSRO:
         self.oracle_training_steps = psro_cfg["oracle_training_steps"]
         self.max_population_size = psro_cfg["max_population_size"]
         self.meta_solver = psro_cfg["meta_solver"]
-        self.opponent_sampling = psro_cfg["opponent_sampling"]
+        self.response_sampling = psro_cfg["response_sampling"]
         self.add_only_if_improved = psro_cfg["add_only_if_improved"]
-        self.evaluate_full_population = psro_cfg["evaluate_full_population"]
         self.payoff_gamma = psro_cfg["payoff_gamma"]
-        self.save_population = psro_cfg["save_population"]
-        self.population_dir = psro_cfg["population_dir"]
-
-        os.makedirs(self.population_dir, exist_ok=True)
 
         # ======================================================
         # Logging / Evaluation
         # ======================================================
+        self.timestep = 0
+        self.rand_code = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+        self.log_enabled = config["psro_logging"]["enabled"]
+        self.log_interval = config["psro_logging"]["log_interval"]
+        self.save_population_interval = config["psro_logging"]["save_population_interval"]
+
+        self.eval_enabled = config["psro_evaluation"]["enabled"]
+        self.eval_episodes = config["psro_evaluation"]["eval_episodes"]
 
         self.score_history = {
             a: [0.0] for a in self.agents
         }
-        self.eval_episodes = config["evaluation"]["eval_episodes"]
 
         # ======================================================
         # Population
@@ -141,6 +145,26 @@ class PSRO:
 
             print(f"\n[PSRO] Iteration {iteration}")
 
+            ###################################################
+            if self.log_enabled:
+                # ensure folder exists 
+                os.makedirs("results/PSRO", exist_ok=True)
+                # generate unique filename
+                while True:
+                    
+                    filename = f"results/PSRO/psro_{self.config['env']['name']}_{self.rand_code}.csv"
+                    
+                    if not os.path.exists(filename):
+                        break  # found unused name
+                    
+                # logger
+                log_file = open(filename, "w", newline="")
+                writer = csv.writer(log_file)
+
+                header = ["iteration"] + ["timestep"] + [f"reward_{a}" for a in self.agents]
+                writer.writerow(header)
+            ###################################################
+
             payoff_matrix = self.get_payoff_matrix(self.eval_episodes)
             print(f"[PSRO] Payoff matrix:\n{payoff_matrix}")
 
@@ -158,8 +182,16 @@ class PSRO:
             # --------------------------------------------------
 
             oracle_info, new_policies = self.train_oracle(sampled_response)
+            
+            self.timestep += self.oracle_training_steps
 
             print(f"[PSRO] Oracle info: {oracle_info}")
+            ##################################################
+            if self.log_enabled and iteration % self.log_interval == 0:
+                row = [iteration, self.timestep] + [oracle_info[a] for a in self.agents]
+                writer.writerow(row)
+                log_file.flush()
+            ##################################################
 
             # --------------------------------------------------
             # Add oracle to population
@@ -170,6 +202,20 @@ class PSRO:
             self.add_oracle_to_population(improved, new_policies)
 
             print("[PSRO] Score history:", self.score_history)
+
+            # -------- Checkpointing ---------
+            ''''''
+            if self.config['logging']['enable_saving'] and \
+                 iteration % self.save_population_interval == 0 and iteration > 0:
+
+                path = f'checkpoints/{self.config["algorithm"]["name"]}_{self.config["env"]["name"]}_{self.rand_code}'
+                os.makedirs(path, exist_ok=True)
+
+                self.save(path = path + f'/populations_t{iteration}.pth')
+                
+                print(f'[Checkpoint] saved at timestep={iteration}')
+            
+            # --------------------------------
 
 
     # ==========================================================
@@ -409,3 +455,16 @@ class PSRO:
             # keep score history aligned
             self.score_history[agent].pop(0)
             print(f"[PSRO] Pruned population for {agent}. New size: {len(self.population[agent])}")
+
+    def save(self, path):
+
+        save_dict = {}
+
+        for a in self.agents:
+
+            save_dict[a] = [
+                policy.state_dict()
+                for policy in self.population[a]
+            ]
+
+        torch.save(save_dict, path)
