@@ -2,7 +2,7 @@ import os
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
-    
+'''
 def load_algorithm_data(algo_path, column):
     all_runs = []
 
@@ -24,8 +24,27 @@ def load_algorithm_data(algo_path, column):
     all_runs = np.array([run[:min_len] for run in all_runs])
 
     return all_runs
+'''
 
+def load_algorithm_data(algo_path, x_col, y_col):
+    runs = []
 
+    for file in os.listdir(algo_path):
+        if file.endswith(".csv"):
+            df = pd.read_csv(os.path.join(algo_path, file))
+
+            if x_col not in df.columns or y_col not in df.columns:
+                continue
+
+            df = df[[x_col, y_col]].dropna()
+            runs.append(df)
+
+    if not runs:
+        return None
+
+    return runs
+
+'''
 def plot_results(base_dir, column, mode=None, shade=None):
     plt.figure()
 
@@ -92,27 +111,92 @@ def plot_results(base_dir, column, mode=None, shade=None):
 
                 plt.fill_between(x_shade, avg_min, avg_max, alpha=0.2)
 
-    plt.xlabel("Generation")
+    plt.xlabel("Timesteps")
 
     if mode == "log":
-        plt.ylabel("log10(Cost)")
+        plt.ylabel(f"log10({column})")
     else:
-        plt.ylabel("Cost")
+        plt.ylabel(f"{column}")
 
     # ===== FIX SCALE USAGE =====
     if mode == "log":
         plt.yscale("linear")   
 
-    plt.title(column)
+    plt.title("PPO-Cooperative pong")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+'''
+
+def plot_results(base_dir, y_col, x_col="timestep", mode=None, shade=None):
+    plt.figure()
+
+    for algo in os.listdir(base_dir):
+        algo_path = os.path.join(base_dir, algo)
+
+        if not os.path.isdir(algo_path):
+            continue
+
+        runs = load_algorithm_data(algo_path, x_col, y_col)
+
+        if runs is None:
+            print(f"[WARNING] {algo} missing data")
+            continue
+
+        # ---- collect all timesteps ----
+        all_timesteps = np.unique(np.concatenate([r[x_col].values for r in runs]))
+
+        aligned_values = []
+
+        for r in runs:
+            x = r[x_col].values
+            y = r[y_col].values
+
+            # interpolate onto global timestep grid
+            y_interp = np.interp(all_timesteps, x, y)
+            aligned_values.append(y_interp)
+
+        all_runs = np.array(aligned_values)
+
+        # ===== LOG MODE =====
+        if mode == "log":
+            eps = 1e-12
+            all_runs = np.log10(all_runs + eps)
+
+        mean_curve = np.mean(all_runs, axis=0)
+
+        plt.plot(all_timesteps, mean_curve, label=algo)
+
+        # ===== SHADING =====
+        if shade == "variance":
+            std_curve = np.std(all_runs, axis=0)
+            plt.fill_between(all_timesteps,
+                             mean_curve - std_curve,
+                             mean_curve + std_curve,
+                             alpha=0.2)
+
+    plt.xlabel(x_col)
+
+    if mode == "log":
+        plt.ylabel(f"log10({y_col})")
+    else:
+        plt.ylabel(y_col)
+
+    plt.title("PPO-Cooperative Pong")
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
     plt.show()
 
+'''
+all_timesteps = all_timesteps[::2]  # or every 4th point
+'''
+
 
 if __name__ == "__main__":
-    base_dir = "results/PPO"  # root folder
+    base_dir = "results/"  # root folder
     
 
-    column = "epsisode_reward"  # column to plot
+    column = "episode_reward"  # column to plot
     plot_results(base_dir, column, shade="variance")
