@@ -54,9 +54,9 @@ evaluation:
 logging:
   enabled: False
   log_type: "independent" # "mean" or "max" or "independent"
-  log_interval: 512
+  log_interval: 4096
   enable_saving: True # set "False" for PSRO, since PSRO has its own population saving mechanism.
-  save_model_interval: 5000
+  save_model_interval: 163840
 
 # ==========================================================
 # Device

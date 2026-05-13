@@ -752,10 +752,11 @@ class PPO:
             if self.config['logging']['enable_saving'] and \
                 timestep % self.save_model_interval == 0 and timestep > 0:
 
-                for a, policy in self.policies.items():
-                    self.save(
-                        f'checkpoints/{self.config["algorithm"]["name"]}_{{self.config["env"]["name"]}}_{self.rand_code}/learner_{timestep}.pt'
-                    )
+                path = f'checkpoints/{self.config["algorithm"]["name"]}_{self.config["env"]["name"]}_{self.rand_code}'
+                os.makedirs(path, exist_ok=True)
+
+                self.save(path = path + f'/agents_t{timestep}.pth')
+                
                 print(f'[Checkpoint] saved at timestep={timestep}')
             
             # --------------------------------
@@ -992,15 +993,10 @@ class PPO:
             }, path)
 
         else:
-            if self.freeze_one_agent:
-                # Only save the learnable agent's policy
-                learning_agent = self.agents[0]  # assuming agent_0 is learnable
-                torch.save(self.policies[learning_agent].state_dict(), path)
-            else:
-                torch.save({
-                    'models': {
-                        a: self.policies[a].state_dict()
-                        for a in self.agents
-                    }
-                }, path)
+            torch.save({
+                'models': {
+                    a: self.policies[a].state_dict()
+                    for a in self.agents
+                }
+            }, path)
 

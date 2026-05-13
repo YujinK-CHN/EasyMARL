@@ -263,6 +263,7 @@ class QMIX:
         self.train_epochs = train_cfg.get("train_epochs", 1)
         self.mini_batch_size = train_cfg["mini_batch_size"]
         self.target_update_interval = train_cfg["target_update_interval"]
+        self.freeze_one_agent = self.config['training'].get('freeze_one_agent', False)
 
         # --------------------------------------------------
         # Exploration
@@ -272,6 +273,11 @@ class QMIX:
         self.eps_decay = exp_cfg["epsilon_decay_steps"]
 
         self.step_count = 0
+
+        if self.freeze_one_agent:
+            # Freeze agent_1's policy (treat as part of environment)
+            for p in self.policies[self.agents[1]].parameters():
+                p.requires_grad = False
 
     # ======================================================
     # Epsilon schedule
@@ -556,10 +562,11 @@ class QMIX:
             if self.config['logging']['enable_saving'] and \
                 timestep % self.save_model_interval == 0 and timestep > 0:
 
-                for a, policy in self.policies.items():
-                    self.save(
-                        f'checkpoints/{self.config["algorithm"]["name"]}_{{self.config["env"]["name"]}}_{self.rand_code}/learner_{timestep}.pt'
-                    )
+                path = f'checkpoints/{self.config["algorithm"]["name"]}_{self.config["env"]["name"]}_{self.rand_code}'
+                os.makedirs(path, exist_ok=True)
+
+                self.save(path = path + f'/agents_t{timestep}.pth')
+                
                 print(f'[Checkpoint] saved at timestep={timestep}')
             
             # --------------------------------
@@ -645,6 +652,8 @@ class QMIX:
             else:
                 desc = 'Timestep:{} Return:{:0.6f}'.format(timestep, episode_reward)
             iterator.set_description(desc)
+
+            self.step_count += 1
 
     
     # ======================================================
