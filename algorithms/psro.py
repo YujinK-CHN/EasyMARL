@@ -150,14 +150,14 @@ class PSRO:
             for agent in self.agents:
                 print(f"  {agent} population size: {len(self.population[agent])}")
 
-            opponent_policies, sampled_idx = self.sample_opponents(payoff_matrix=payoff_matrix)
+            sampled_response, sampled_idx = self.sample_response(payoff_matrix=payoff_matrix)
 
             print(f"[PSRO] Sampled opponents: {sampled_idx}")
             # --------------------------------------------------
             # Train oracle
             # --------------------------------------------------
 
-            oracle_info, new_policies = self.train_oracle(opponent_policies)
+            oracle_info, new_policies = self.train_oracle(sampled_response)
 
             print(f"[PSRO] Oracle info: {oracle_info}")
 
@@ -176,7 +176,7 @@ class PSRO:
     # Sample Opponents
     # ==========================================================
 
-    def sample_opponents(self, payoff_matrix=None):
+    def sample_response(self, payoff_matrix=None):
 
         sampled = {}
         sampled_idx = {}
@@ -189,7 +189,7 @@ class PSRO:
             # Uniform sampling
             # ----------------------------------------------
 
-            if self.opponent_sampling == "uniform":
+            if self.response_sampling == "uniform":
 
                 idx = random.randint(0, pop_size - 1)
 
@@ -197,7 +197,7 @@ class PSRO:
             # Latest policy
             # ----------------------------------------------
 
-            elif self.opponent_sampling == "latest":
+            elif self.response_sampling == "latest":
 
                 idx = pop_size - 1
 
@@ -205,7 +205,7 @@ class PSRO:
             # Meta strategy
             # ----------------------------------------------
 
-            elif self.opponent_sampling == "meta_strategy":
+            elif self.response_sampling == "meta_strategy":
 
                 meta_strateies = self.compute_meta_strategies(payoff_matrix=payoff_matrix)
                 print(f"[PSRO] Meta strategies: {meta_strateies}")
@@ -217,19 +217,15 @@ class PSRO:
 
             else:
                 raise ValueError(
-                    f"Unknown opponent sampling: "
-                    f"{self.opponent_sampling}"
+                    f"Unknown response sampling: "
+                    f"{self.response_sampling}"
                 )
 
-            if i==0:
-                sampled[self.agents[1]] = self.population[agent][idx]
-                sampled_idx[self.agents[1]] = idx
-            elif i==1:
-                sampled[self.agents[0]] = self.population[agent][idx]
-                sampled_idx[self.agents[0]] = idx
+            sampled_idx[agent] = idx
+            sampled[agent] = self.population[agent][idx]
         return sampled, sampled_idx
 
-    def train_oracle(self, opponent_policies):
+    def train_oracle(self, sampled_response):
 
         oracle_info = {}
 
@@ -243,15 +239,20 @@ class PSRO:
             episode_stats.append(info["episode_reward"])
 
         for i, agent in enumerate(self.agents):
-            opponent_agent = opponent_policies[agent]
-            
+            learning_agent = sampled_response[agent]
+            opponent_agent = sampled_response[self.agents[1] if i == 0 else self.agents[0]]
+
             # ======================================================
             # 2. Inject opponent into PPO (frozen behavior)
             # ======================================================
 
-            self.oracle.policies[self.agents[1]].load_state_dict(opponent_agent)
+            self.oracle.policies[self.agents[0]].load_state_dict(learning_agent)
 
-            self.oracle.policies[self.agents[1]].eval()
+            # IMPORTANT: ensure oracle optimize a0
+            for p in self.oracle.policies[self.agents[0]].parameters():
+                p.requires_grad = True
+
+            self.oracle.policies[self.agents[1]].load_state_dict(opponent_agent)
 
             # IMPORTANT: ensure oracle does NOT try to optimize a1
             for p in self.oracle.policies[self.agents[1]].parameters():
