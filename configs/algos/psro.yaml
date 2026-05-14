@@ -80,6 +80,6 @@ psro_logging:
 # ==========================================================
 psro_evaluation:
   # Save each new oracle
-  enabled: False
+  enabled: True
 
   eval_episodes: 5

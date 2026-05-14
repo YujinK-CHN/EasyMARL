@@ -170,8 +170,7 @@ class PSRO:
                 self.payoff_matrix = self.update_payoff_matrix(payoff_matrix=self.payoff_matrix, episodes=self.eval_episodes)
                 print(f"[PSRO] Payoff matrix:\n{self.payoff_matrix}")
             else:
-                self.payoff_matrix = self.build_payoff_matrix_from_history()
-                print(f"[PSRO] Hybrid payoff matrix:\n{self.payoff_matrix}")
+                print(f"[PSRO] Do NOT support yet!:\n{self.payoff_matrix}")
 
             # --------------------------------------------------
             # Sample opponents
@@ -181,7 +180,7 @@ class PSRO:
 
             sampled_response, sampled_idx = self.sample_response(payoff_matrix=self.payoff_matrix)
 
-            print(f"[PSRO] Sampled response: {sampled_idx}")
+            print(f"[PSRO] Sampled responses: {sampled_idx}")
             # --------------------------------------------------
             # Train oracle
             # --------------------------------------------------
@@ -410,40 +409,6 @@ class PSRO:
 
             payoff_matrix[self.agents[0]][i, j] = rewards[self.agents[0]]
             payoff_matrix[self.agents[1]][i, j] = rewards[self.agents[1]]
-
-        return payoff_matrix
-    
-    def build_payoff_matrix_from_history(self):
-        pop0_size = len(self.population[self.agents[0]])
-        pop1_size = len(self.population[self.agents[1]])
-
-        payoff_matrix = {
-            agent: np.full((pop0_size, pop1_size), 0.0)
-            for agent in self.agents
-        }
-
-        # fill using score history
-        #
-        # Example interpretation:
-        #
-        # score_history[a2][i]
-        # = payoff of newest a2 policy vs a1 policy i
-        #
-        # score_history[a1][j]
-        # = payoff of newest a1 policy vs a2 policy j
-        #
-
-        # newest a2 row
-        newest_a2 = pop1_size - 1
-
-        for i, score in enumerate(self.score_history[self.agents[1]]):
-            payoff_matrix[self.agents[1]][i, newest_a2] = score
-
-        # newest a1 column
-        newest_a1 = pop0_size - 1
-
-        for j, score in enumerate(self.score_history[self.agents[0]]):
-            payoff_matrix[self.agents[0]][newest_a1, j] = score
 
         return payoff_matrix
     
