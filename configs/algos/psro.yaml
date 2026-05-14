@@ -73,7 +73,7 @@ psro_logging:
   # per PSRO iteration
   log_interval: 1 
 
-  save_population_interval: 1
+  save_population_interval: 5
 
 # ==========================================================
 # PSRO evaluation

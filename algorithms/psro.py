@@ -211,7 +211,7 @@ class PSRO:
 
                 self.save(path = path + f'/populations_t{iteration}.pth')
                 
-                print(f'[Checkpoint] saved at timestep={iteration}')
+                print(f'[Checkpoint] saved at iteration={iteration}')
             
             # --------------------------------
 
@@ -381,7 +381,7 @@ class PSRO:
             self.oracle.policies[self.agents[0]].load_state_dict(pop0[i])
             self.oracle.policies[self.agents[1]].load_state_dict(policy1)
 
-            print(f"[PSRO] Evaluating population 0: {i} and population 1: {j}")
+            print(f"[PSRO] Evaluating <P0>: {i} and <P1>: {j}")
             rewards = self.oracle.evaluate(episodes=episodes)
 
             payoff_matrix[self.agents[0]][i, j] = rewards[self.agents[0]]
@@ -394,7 +394,7 @@ class PSRO:
             self.oracle.policies[self.agents[0]].load_state_dict(policy0)
             self.oracle.policies[self.agents[1]].load_state_dict(pop1[j])
 
-            print(f"[PSRO] Evaluating population 1: {j} and population 0: {i}")
+            print(f"[PSRO] Evaluating <P1>: {j} and <P0>: {i}")
             rewards = self.oracle.evaluate(episodes=episodes)
 
             payoff_matrix[self.agents[0]][i, j] = rewards[self.agents[0]]
