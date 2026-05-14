@@ -30,10 +30,10 @@ psro:
   iterations: 20
 
   # for each oracle training phase
-  oracle_training_steps: 4096
+  oracle_training_steps: 40960
 
   # Population size limit
-  max_population_size: 5
+  max_population_size: 3
 
   # Meta strategy solver
   meta_solver: fictitious_play
@@ -80,6 +80,6 @@ psro_logging:
 # ==========================================================
 psro_evaluation:
   # Save each new oracle
-  enabled: True
+  enabled: False
 
-  eval_episodes: 1
+  eval_episodes: 5

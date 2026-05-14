@@ -65,6 +65,7 @@ class PSRO:
         self.population = {
             a: [] for a in self.agents
         }
+        self.payoff_matrix = None
 
         # ======================================================
         # Oracle learner
@@ -165,8 +166,12 @@ class PSRO:
 
             print(f"\n[PSRO] Iteration {iteration}")
 
-            payoff_matrix = self.get_payoff_matrix(self.eval_episodes)
-            print(f"[PSRO] Payoff matrix:\n{payoff_matrix}")
+            if self.eval_enabled:
+                self.payoff_matrix = self.update_payoff_matrix(payoff_matrix=self.payoff_matrix, episodes=self.eval_episodes)
+                print(f"[PSRO] Payoff matrix:\n{self.payoff_matrix}")
+            else:
+                self.payoff_matrix = self.build_payoff_matrix_from_history()
+                print(f"[PSRO] Hybrid payoff matrix:\n{self.payoff_matrix}")
 
             # --------------------------------------------------
             # Sample opponents
@@ -174,7 +179,7 @@ class PSRO:
             for agent in self.agents:
                 print(f"  {agent} population size: {len(self.population[agent])}")
 
-            sampled_response, sampled_idx = self.sample_response(payoff_matrix=payoff_matrix)
+            sampled_response, sampled_idx = self.sample_response(payoff_matrix=self.payoff_matrix)
 
             print(f"[PSRO] Sampled opponents: {sampled_idx}")
             # --------------------------------------------------
@@ -354,29 +359,91 @@ class PSRO:
                 self.prune_population(agent)
                 print(f"[PSRO] Added oracle to population for {agent}.")
 
-    def get_payoff_matrix(self, episodes=5):
+    def update_payoff_matrix(self, payoff_matrix=None, episodes=5):
+        """
+        Incrementally update the payoff matrix using only the newest policies.
+        """
 
         pop0 = self.population[self.agents[0]]
         pop1 = self.population[self.agents[1]]
 
-        payoff_matrix = {agent: np.zeros((len(pop0), len(pop1))) for agent in self.agents}
+        n0 = len(pop0)
+        n1 = len(pop1)
 
-        for i, policy0 in enumerate(pop0):
-            print(1)
+        # initialize if first time
+        if payoff_matrix is None:
+            payoff_matrix = {
+                agent: np.zeros((n0, n1))
+                for agent in self.agents
+            }
 
-            for j, policy1 in enumerate(pop1):
-                print(2)
+        else:
+            # expand existing matrices
+            for agent in self.agents:
+                old = payoff_matrix[agent]
 
-                # load policies
-                self.oracle.policies[self.agents[0]].load_state_dict(policy0)
-                self.oracle.policies[self.agents[1]].load_state_dict(policy1)
+                new_matrix = np.zeros((n0, n1))
+                new_matrix[:old.shape[0], :old.shape[1]] = old
 
-                # evaluate matchup
-                rewards = self.oracle.evaluate(episodes=episodes)
+                payoff_matrix[agent] = new_matrix
 
-                # store payoff
-                payoff_matrix[self.agents[0]][i, j] = rewards[self.agents[0]]
-                payoff_matrix[self.agents[1]][i, j] = rewards[self.agents[1]]
+        # evaluate newest policy from pop0 against all pop1
+        i = n0 - 1
+        for j, policy1 in enumerate(pop1):
+
+            self.oracle.policies[self.agents[0]].load_state_dict(pop0[i])
+            self.oracle.policies[self.agents[1]].load_state_dict(policy1)
+
+            rewards = self.oracle.evaluate(episodes=episodes)
+
+            payoff_matrix[self.agents[0]][i, j] = rewards[self.agents[0]]
+            payoff_matrix[self.agents[1]][i, j] = rewards[self.agents[1]]
+
+        # evaluate all pop0 against newest policy from pop1
+        j = n1 - 1
+        for i, policy0 in enumerate(pop0[:-1]):  # skip duplicate corner eval
+
+            self.oracle.policies[self.agents[0]].load_state_dict(policy0)
+            self.oracle.policies[self.agents[1]].load_state_dict(pop1[j])
+
+            rewards = self.oracle.evaluate(episodes=episodes)
+
+            payoff_matrix[self.agents[0]][i, j] = rewards[self.agents[0]]
+            payoff_matrix[self.agents[1]][i, j] = rewards[self.agents[1]]
+
+        return payoff_matrix
+    
+    def build_payoff_matrix_from_history(self):
+        pop0_size = len(self.population[self.agents[0]])
+        pop1_size = len(self.population[self.agents[1]])
+
+        payoff_matrix = {
+            agent: np.full((pop0_size, pop1_size), np.nan)
+            for agent in self.agents
+        }
+
+        # fill using score history
+        #
+        # Example interpretation:
+        #
+        # score_history[a2][i]
+        # = payoff of newest a2 policy vs a1 policy i
+        #
+        # score_history[a1][j]
+        # = payoff of newest a1 policy vs a2 policy j
+        #
+
+        # newest a2 row
+        newest_a2 = pop1_size - 1
+
+        for i, score in enumerate(self.score_history[self.agents[1]]):
+            payoff_matrix[self.agents[1]][i, newest_a2] = score
+
+        # newest a1 column
+        newest_a1 = pop0_size - 1
+
+        for j, score in enumerate(self.score_history[self.agents[0]]):
+            payoff_matrix[self.agents[0]][newest_a1, j] = score
 
         return payoff_matrix
     
