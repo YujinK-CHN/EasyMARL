@@ -181,7 +181,7 @@ class PSRO:
 
             sampled_response, sampled_idx = self.sample_response(payoff_matrix=self.payoff_matrix)
 
-            print(f"[PSRO] Sampled opponents: {sampled_idx}")
+            print(f"[PSRO] Sampled response: {sampled_idx}")
             # --------------------------------------------------
             # Train oracle
             # --------------------------------------------------
@@ -418,7 +418,7 @@ class PSRO:
         pop1_size = len(self.population[self.agents[1]])
 
         payoff_matrix = {
-            agent: np.full((pop0_size, pop1_size), np.nan)
+            agent: np.full((pop0_size, pop1_size), 0.0)
             for agent in self.agents
         }
 
