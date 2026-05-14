@@ -902,38 +902,17 @@ class PPO:
 
                 with torch.no_grad():
 
-                    for agent, obs in observations.items():
-
-                        obs_tensor = (
-                            torch.FloatTensor(obs)
-                            .unsqueeze(0)
-                            .to(self.device)
-                        )
-
-                        # -----------------------------
-                        # choose correct policy
-                        # -----------------------------
-                        if self.shared:
-                            policy = self.policy
-                        else:
-                            policy = self.policies[agent]
-
-                        dist, _ = policy.get_dist(obs_tensor)
-
-                        # -----------------------------
-                        # action selection
-                        # -----------------------------
-                        if policy.action_space == 'discrete':
-                            action = torch.argmax(
-                                dist.logits,
-                                dim=-1
-                            ).item()
-
-                        else:
-                            action = dist.mean[0].cpu().numpy()
-                            action = np.clip(action, -1.0, 1.0)
-
-                        actions[agent] = action
+                    if self.centralized_critic:
+                        global_obs = torch.tensor(
+                            self.build_global_obs(observations),
+                            dtype=torch.float32,
+                            device=self.device
+                        ).unsqueeze(0)
+                        actions, log_probs, values = \
+                            self.select_actions(observations, global_obs)
+                    else:
+                        actions, log_probs, values = \
+                            self.select_actions(observations)
 
                 #print(actions)
                 observations, reward, terminations, truncations, infos = \
