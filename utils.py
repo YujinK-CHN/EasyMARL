@@ -77,6 +77,7 @@ def make_env(config):
             combat_tank_v2,
             combat_plane_v2,
             flag_capture_v2,
+            pong_v3,
         )
 
         env_map = {
@@ -85,6 +86,7 @@ def make_env(config):
             'combat_tank_v2': combat_tank_v2,
             'combat_plane_v2': combat_plane_v2,
             'flag_capture_v2': flag_capture_v2,
+            'pong_v3': pong_v3
         }
 
     else:

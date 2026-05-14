@@ -53,10 +53,6 @@ class PSRO:
         self.eval_enabled = config["psro_evaluation"]["enabled"]
         self.eval_episodes = config["psro_evaluation"]["eval_episodes"]
 
-        self.score_history = {
-            a: [0.0] for a in self.agents
-        }
-
         # ======================================================
         # Population
         # ======================================================
@@ -192,7 +188,7 @@ class PSRO:
             print(f"[PSRO] Oracle info: {oracle_info}")
             ##################################################
             if self.log_enabled and iteration % self.log_interval == 0:
-                row = [iteration, self.timestep] + [oracle_info[a] for a in self.agents]
+                row = [iteration, self.timestep] + [np.max(self.payoff_matrix[a]) for a in self.agents]
                 writer.writerow(row)
                 log_file.flush()
             ##################################################
@@ -204,8 +200,6 @@ class PSRO:
             improved = self.should_add_oracle(oracle_info, sampled_idx)
 
             self.add_oracle_to_population(improved, new_policies)
-
-            print("[PSRO] Score history:", self.score_history)
 
             # -------- Checkpointing ---------
             ''''''
@@ -333,11 +327,10 @@ class PSRO:
         for i, agent in enumerate(self.agents):
 
             new_score = oracle_info[agent]
-            old_score = self.score_history[agent][sampled_idx[agent]]
+            old_score = self.payoff_matrix[agent][sampled_idx[self.agents[0]]][sampled_idx[self.agents[1]]]
 
             if new_score > old_score:
                 improved[agent] = True
-                self.score_history[agent][sampled_idx[agent]] = new_score
             else:
                 improved[agent] = False
 
@@ -350,11 +343,6 @@ class PSRO:
             if improved[agent]:
 
                 self.population[agent].append(new_policies[agent])
-                if i == 0:
-                    self.score_history[self.agents[1]].append(0.0)
-                else:
-                    self.score_history[self.agents[0]].append(0.0)
-
                 self.prune_population(agent)
                 print(f"[PSRO] Added oracle to population for {agent}.")
 
@@ -393,6 +381,7 @@ class PSRO:
             self.oracle.policies[self.agents[0]].load_state_dict(pop0[i])
             self.oracle.policies[self.agents[1]].load_state_dict(policy1)
 
+            print(f"[PSRO] Evaluating population 0: {i} and population 1: {j}")
             rewards = self.oracle.evaluate(episodes=episodes)
 
             payoff_matrix[self.agents[0]][i, j] = rewards[self.agents[0]]
@@ -405,6 +394,7 @@ class PSRO:
             self.oracle.policies[self.agents[0]].load_state_dict(policy0)
             self.oracle.policies[self.agents[1]].load_state_dict(pop1[j])
 
+            print(f"[PSRO] Evaluating population 1: {j} and population 0: {i}")
             rewards = self.oracle.evaluate(episodes=episodes)
 
             payoff_matrix[self.agents[0]][i, j] = rewards[self.agents[0]]
@@ -485,20 +475,7 @@ class PSRO:
         if len(self.population[agent]) > self.max_population_size:
             # remove oldest policy (FIFO)
             self.population[agent].pop(0)
-
-            # keep score history aligned
-            self.score_history[agent].pop(0)
             print(f"[PSRO] Pruned population for {agent}. New size: {len(self.population[agent])}")
 
     def save(self, path):
-
-        save_dict = {}
-
-        for a in self.agents:
-
-            save_dict[a] = [
-                policy.state_dict()
-                for policy in self.population[a]
-            ]
-
-        torch.save(save_dict, path)
+        torch.save(self.population, path)

@@ -1,0 +1,16 @@
+# ==========================================================
+# Pong (PettingZoo)
+# ==========================================================
+
+env:
+  family: "atari"
+  name: "pong_v3"
+  seed: 42
+
+  parallel: true
+
+  # PettingZoo environment constructor arguments
+  kwargs:
+    obs_type: "rgb_image"   # alternatives: "ram"
+    render_mode: "human"    # use null, "human", or "rgb_array"
+    max_cycles: 4096

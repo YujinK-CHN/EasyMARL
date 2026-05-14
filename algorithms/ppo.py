@@ -819,6 +819,7 @@ class PPO:
                         callback(results)
                     if self.config['logging']['enabled']:
                         writer.writerow([timestep] + [ind_episode_reward[a] for a in self.agents])
+                        log_file.flush()
                     ind_episode_reward = {a: 0.0 for a in self.agents}
                     
                 else:
@@ -834,6 +835,7 @@ class PPO:
                         callback(results)
                     if self.config['logging']['enabled']:
                         writer.writerow([timestep, episode_reward])
+                        log_file.flush()
                     episode_reward = 0.0
 
             # -------- Compute returns and advantages, then update policy ---------
