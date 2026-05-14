@@ -6,7 +6,7 @@ algorithm:
   name: psro
 
   # Base RL oracle learner
-  oracle_algorithm: qmix
+  oracle_algorithm: ppo
   # For PPO oracle: it only works with independent policies (shared_policy=False)
 
   shared_policy: False
@@ -30,7 +30,7 @@ psro:
   iterations: 20
 
   # for each oracle training phase
-  oracle_training_steps: 50000
+  oracle_training_steps: 4096
 
   # Population size limit
   max_population_size: 5
@@ -81,5 +81,5 @@ psro_logging:
 psro_evaluation:
   # Save each new oracle
   enabled: True
-  
-  eval_episodes: 5
+
+  eval_episodes: 1

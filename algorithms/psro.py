@@ -2,7 +2,7 @@ import os
 import copy
 import random
 import csv
-from tomlkit import string
+import string
 from run import load_config
 import torch
 import numpy as np
@@ -141,29 +141,29 @@ class PSRO:
 
         print("[PSRO] Starting training...")
 
+        ###################################################
+        if self.log_enabled:
+            # ensure folder exists 
+            os.makedirs("results/PSRO", exist_ok=True)
+            # generate unique filename
+            while True:
+                
+                filename = f"results/PSRO/psro_{self.config['env']['name']}_{self.rand_code}.csv"
+                
+                if not os.path.exists(filename):
+                    break  # found unused name
+                
+            # logger
+            log_file = open(filename, "w", newline="")
+            writer = csv.writer(log_file)
+
+            header = ["iteration"] + ["timestep"] + [f"reward_{a}" for a in self.agents]
+            writer.writerow(header)
+        ###################################################
+
         for iteration in range(self.iterations):
 
             print(f"\n[PSRO] Iteration {iteration}")
-
-            ###################################################
-            if self.log_enabled:
-                # ensure folder exists 
-                os.makedirs("results/PSRO", exist_ok=True)
-                # generate unique filename
-                while True:
-                    
-                    filename = f"results/PSRO/psro_{self.config['env']['name']}_{self.rand_code}.csv"
-                    
-                    if not os.path.exists(filename):
-                        break  # found unused name
-                    
-                # logger
-                log_file = open(filename, "w", newline="")
-                writer = csv.writer(log_file)
-
-                header = ["iteration"] + ["timestep"] + [f"reward_{a}" for a in self.agents]
-                writer.writerow(header)
-            ###################################################
 
             payoff_matrix = self.get_payoff_matrix(self.eval_episodes)
             print(f"[PSRO] Payoff matrix:\n{payoff_matrix}")
@@ -362,8 +362,10 @@ class PSRO:
         payoff_matrix = {agent: np.zeros((len(pop0), len(pop1))) for agent in self.agents}
 
         for i, policy0 in enumerate(pop0):
+            print(1)
 
             for j, policy1 in enumerate(pop1):
+                print(2)
 
                 # load policies
                 self.oracle.policies[self.agents[0]].load_state_dict(policy0)
