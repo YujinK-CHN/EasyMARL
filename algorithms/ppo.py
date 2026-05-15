@@ -393,6 +393,11 @@ class PPO:
                 for p in self.policies[self.agents[1]].parameters():
                     p.requires_grad = False
 
+                if self.config['existing_enemy']['enabled']:
+                    checkpoint = torch.load(self.config['existing_enemy']['enemy_dir'])
+                    self.policies[self.agents[1]].load_state_dict(checkpoint)
+                    print(f'[PPO] an enemy model is loaded as {self.agents[1]}.')
+
     # ------------------------------------------------------
 
     def _device(self):
@@ -709,11 +714,11 @@ class PPO:
         ###################################################
         if self.config['logging']['enabled']:
             # ensure folder exists 
-            os.makedirs("results/PPO", exist_ok=True)
+            os.makedirs("results/train/PPO", exist_ok=True)
             # generate unique filename
             while True:
                 
-                filename = f"results/PPO/ppo_{self.config['env']['name']}_{self.rand_code}.csv"
+                filename = f"results/train/PPO/ppo_{self.config['env']['name']}_{self.rand_code}.csv"
                 
                 if not os.path.exists(filename):
                     break  # found unused name
@@ -727,24 +732,40 @@ class PPO:
             elif self.log_type in ["mean", "max"]:
                 header = ["timestep", "episode_reward"]
             writer.writerow(header)
+
+            if self.eval_enabled:
+                os.makedirs("results/evaluation/PPO", exist_ok=True)
+                while True:
+                    eval_name = f"results/evaluation/PPO/eval_ppo_{self.config['env']['name']}_{self.rand_code}.csv"
+                    if not os.path.exists(eval_name):
+                        break  # found unused name
+                eval_file = open(eval_name, "w", newline="")
+                eval_writer = csv.writer(eval_file)
+                eval_header = ["timestep"] + [f"reward_{a}" for a in self.agents]
+                eval_writer.writerow(eval_header)
         ###################################################
 
         iterator = trange(self.total_timesteps)
         for timestep in iterator:
             # ---------- Evaluation ----------
-            '''
-            if (self.eval_enabled and timestep % self.eval_interval == 0):
+            ''''''
+            if self.config['logging']['enabled']:
+                if (self.eval_enabled and timestep % self.eval_interval == 0):
 
-                avg_reward = self.evaluate(
-                    episodes=self.eval_episodes
-                )
+                    print('[PPO] Evaluation in progress...')
 
-                print(
-                    f'[Evaluation] timestep={timestep} '
-                    f'avg_reward={avg_reward:.2f}'
-                )
-                observations, infos = self.env.reset(seed=self.config['env']['seed'])
-            '''
+                    mean_rewards = self.evaluate(
+                        episodes=self.eval_episodes
+                    )
+
+                    print(
+                        f'[Evaluation] timestep={timestep} '
+                        f'avg_reward={mean_rewards}'
+                    )
+                    eval_writer.writerow([timestep] + [mean_rewards[a] for a in self.agents])
+                    eval_file.flush()
+                    observations, _ = self.env.reset(seed=self.config['env']['seed'])
+            
             # --------------------------------
 
             if self.centralized_critic:
@@ -871,7 +892,7 @@ class PPO:
             # -------- Checkpointing ---------
             ''''''
             if self.config['logging']['enable_saving'] and \
-                timestep % self.save_model_interval == 0 and timestep > 0:
+                timestep+1 % self.save_model_interval == 0 and timestep > 0:
 
                 path = f'checkpoints/{self.config["algorithm"]["name"]}_{self.config["env"]["name"]}_{self.rand_code}'
                 os.makedirs(path, exist_ok=True)

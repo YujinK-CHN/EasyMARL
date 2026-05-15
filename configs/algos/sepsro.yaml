@@ -3,7 +3,9 @@
 # ==========================================================
 
 algorithm:
-  name: psro
+  # this psro variant is used for the case that PSRO is required to finally 
+  # generate an agent to against an outlander for evaluation.
+  name: sepsro
 
   # Base RL oracle learner
   oracle_algorithm: ppo
@@ -53,13 +55,12 @@ psro:
 # ==========================================================
 # Enemy
 # ==========================================================
-# Only for evaluation, aligning with other baselines like PPO.
-psro_existing_enemy:
+
+existing_enemy:
 
   enabled: True
 
   enemy_dir: ./checkpoints/ppo_enemy/enemy_agent.pt # default for ppo oracle
-
 
 # ==========================================================
 # PSRO logging

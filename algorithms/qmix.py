@@ -279,6 +279,11 @@ class QMIX:
             for p in self.policies[self.agents[1]].parameters():
                 p.requires_grad = False
 
+            if self.config['existing_enemy']['enabled']:
+                checkpoint = torch.load(self.config['existing_enemy']['enemy_dir'])
+                self.policies[self.agents[1]].load_state_dict(checkpoint)
+                print(f'[PPO] an enemy model is loaded as {self.agents[1]}.')
+
     # ======================================================
     # Epsilon schedule
     # ======================================================
@@ -552,22 +557,39 @@ class QMIX:
             elif self.log_type in ["mean", "max"]:
                 header = ["timestep", "episode_reward"]
             writer.writerow(header)
+
+            if self.eval_enabled:
+                os.makedirs("results/evaluation/QMIX", exist_ok=True)
+                while True:
+                    eval_name = f"results/evaluation/QMIX/eval_qmix_{self.config['env']['name']}_{self.rand_code}.csv"
+                    if not os.path.exists(eval_name):
+                        break  # found unused name
+                eval_file = open(eval_name, "w", newline="")
+                eval_writer = csv.writer(eval_file)
+                eval_header = ["timestep"] + [f"reward_{a}" for a in self.agents]
+                eval_writer.writerow(eval_header)
         ###################################################
 
         iterator = trange(self.total_timesteps)
         for timestep in iterator:
-
-            # -------- Checkpointing ---------
+            # ---------- Evaluation ----------
             ''''''
-            if self.config['logging']['enable_saving'] and \
-                timestep % self.save_model_interval == 0 and timestep > 0:
+            if self.config['logging']['enabled']:
+                if (self.eval_enabled and timestep % self.eval_interval == 0):
 
-                path = f'checkpoints/{self.config["algorithm"]["name"]}_{self.config["env"]["name"]}_{self.rand_code}'
-                os.makedirs(path, exist_ok=True)
+                    print('[PPO] Evaluation in progress...')
 
-                self.save(path = path + f'/agents_t{timestep}.pth')
-                
-                print(f'[Checkpoint] saved at timestep={timestep}')
+                    mean_rewards = self.evaluate(
+                        episodes=self.eval_episodes
+                    )
+
+                    print(
+                        f'[Evaluation] timestep={timestep} '
+                        f'avg_reward={mean_rewards}'
+                    )
+                    eval_writer.writerow([timestep] + [mean_rewards[a] for a in self.agents])
+                    eval_file.flush()
+                    observations, _ = self.env.reset(seed=self.config['env']['seed'])
             
             # --------------------------------
 
@@ -653,6 +675,20 @@ class QMIX:
                 desc = 'Timestep:{} Return:{:0.6f}'.format(timestep, episode_reward)
             iterator.set_description(desc)
 
+            # -------- Checkpointing ---------
+            ''''''
+            if self.config['logging']['enable_saving'] and \
+                timestep+1 % self.save_model_interval == 0 and timestep > 0:
+
+                path = f'checkpoints/{self.config["algorithm"]["name"]}_{self.config["env"]["name"]}_{self.rand_code}'
+                os.makedirs(path, exist_ok=True)
+
+                self.save(path = path + f'/agents_t{timestep}.pth')
+                
+                print(f'[Checkpoint] saved at timestep={timestep}')
+            
+            # --------------------------------
+
             self.step_count += 1
 
     
@@ -665,67 +701,43 @@ class QMIX:
         mean_rewards = {}
 
         for policy in self.policies.values():
-            policy.eval()
+            policy.eval()  # important if using nn.Module
 
         for _ in range(episodes):
             observations, infos = self.env.reset()
 
             done = False
-            episode_reward = {a: 0.0 for a in self.agents}
-
-            hidden = {
-                a: self.policies[a].init_hidden(1).to(self.device)
-                for a in self.agents
-            }
+            ind_episode_reward = {a: 0.0 for a in self.agents}
 
             while not done:
                 actions = {}
 
                 with torch.no_grad():
-                    for agent, obs in observations.items():
 
-                        obs_tensor = (
-                            torch.FloatTensor(obs)
-                            .unsqueeze(0)
-                            .unsqueeze(0)
-                            .to(self.device)
-                        )
+                    actions, log_probs, values = \
+                        self.select_actions(observations)
 
-                        policy = self.policies[agent]
-
-                        # ✅ FIX: pass hidden state
-                        q_values, h = policy(obs_tensor, hidden[agent])
-
-                        q_values = q_values.squeeze(0).squeeze(0)
-
-                        action = torch.argmax(q_values, dim=-1).item()
-
-                        actions[agent] = action
-
-                        # ✅ update hidden state
-                        hidden[agent] = h
-
+                #print(actions)
                 observations, reward, terminations, truncations, infos = \
                     self.env.step(actions)
 
                 for a, r in reward.items():
-                    episode_reward[a] += r
+                    ind_episode_reward[a] += r
 
                 done = all(
                     terminations[a] or truncations[a]
-                    for a in terminations.keys()
+                    for a in observations.keys()
                 )
 
-            rewards.append(episode_reward)
+            rewards.append(ind_episode_reward)
 
         for a in self.agents:
-            mean_rewards[a] = np.mean([ep[a] for ep in rewards])
+            score = np.mean([ep[a] for ep in rewards])
+            mean_rewards[a] = score
 
-        print(f"[Evaluation] mean_rewards={mean_rewards}")
-
+        print(f'[Evaluation] mean_rewards={mean_rewards}')
         for policy in self.policies.values():
-            policy.train()
-
+            policy.train()  # important if using nn.Module
         return mean_rewards
     
     def save(self, path):

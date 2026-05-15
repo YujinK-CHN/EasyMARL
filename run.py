@@ -54,7 +54,7 @@ def main():
         f'configs/envs/{args.env}.yaml'
     )
 
-    if algo_config['algorithm']['name'] == 'psro':
+    if algo_config['algorithm']['name'] == 'psro' or algo_config['algorithm']['name'] == 'sepsro':
         oracle_config = load_config(
             f'configs/algos/{algo_config["algorithm"]["oracle_algorithm"]}.yaml'
         )
@@ -114,6 +114,12 @@ def main():
         elif args.algo == 'psro':
 
             from algorithms.psro import PSRO
+
+            agent = PSRO(config, env)
+
+        elif args.algo == 'sepsro':
+
+            from EasyMARL.algorithms.sepsro import SEPSRO
 
             agent = PSRO(config, env)
             

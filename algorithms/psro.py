@@ -63,6 +63,11 @@ class PSRO:
         }
         self.payoff_matrix = None
 
+        # load enemy for evaluation only.
+        if self.config['psro_existing_enemy']['enabled']:
+            print('[PSRO] an enemy have been loaded for explicit evaluation.')
+            self.enemy_checkpoint = torch.load(self.config['psro_existing_enemy']['enemy_dir'])
+
         # ======================================================
         # Oracle learner
         # ======================================================
@@ -141,11 +146,11 @@ class PSRO:
         ###################################################
         if self.log_enabled:
             # ensure folder exists 
-            os.makedirs("results/PSRO", exist_ok=True)
+            os.makedirs("results/train/PSRO", exist_ok=True)
             # generate unique filename
             while True:
                 
-                filename = f"results/PSRO/psro_{self.config['env']['name']}_{self.rand_code}.csv"
+                filename = f"results/train/PSRO/psro_{self.config['env']['name']}_{self.rand_code}.csv"
                 
                 if not os.path.exists(filename):
                     break  # found unused name
@@ -156,6 +161,17 @@ class PSRO:
 
             header = ["iteration"] + ["timestep"] + [f"reward_{a}" for a in self.agents]
             writer.writerow(header)
+
+            if self.config['psro_existing_enemy']['enabled']:
+                os.makedirs("results/evaluation/PSRO", exist_ok=True)
+                while True:
+                    eval_name = f"results/evaluation/PSRO/eval_psro_{self.config['env']['name']}_{self.rand_code}.csv"
+                    if not os.path.exists(eval_name):
+                        break  # found unused name
+                eval_file = open(eval_name, "w", newline="")
+                eval_writer = csv.writer(eval_file)
+                eval_header = ["iteration"] + ["timestep"] + [f"reward_{a}" for a in self.agents]
+                eval_writer.writerow(eval_header)
         ###################################################
 
         for iteration in range(self.iterations):
@@ -168,6 +184,13 @@ class PSRO:
             else:
                 print(f"[PSRO] Do NOT support yet!:\n{self.payoff_matrix}")
 
+            ##################################################
+            if self.log_enabled and iteration % self.log_interval == 0:
+                row = [iteration, self.timestep] + [np.max(self.payoff_matrix[a]) for a in self.agents]
+                writer.writerow(row)
+                log_file.flush()
+            ##################################################
+
             # --------------------------------------------------
             # Sample opponents
             # --------------------------------------------------
@@ -177,6 +200,21 @@ class PSRO:
             sampled_response, sampled_idx = self.sample_response(payoff_matrix=self.payoff_matrix)
 
             print(f"[PSRO] Sampled responses: {sampled_idx}")
+
+            # --------------------------------------------------
+            # Evaluate on given enemy (if enabled)
+            # --------------------------------------------------
+            if self.config['psro_existing_enemy']['enabled']:
+                mean_rewards = self.evaluate_with_enemy(
+                    best_response=sampled_response, 
+                    episodes=self.eval_episodes)
+                print(
+                    f'[Enemy] iteration={iteration} '
+                    f'avg_reward={mean_rewards}'
+                )
+                eval_writer.writerow([iteration, self.timestep] + [mean_rewards[a] for a in self.agents])
+                eval_file.flush()
+
             # --------------------------------------------------
             # Train oracle
             # --------------------------------------------------
@@ -186,12 +224,6 @@ class PSRO:
             self.timestep += self.oracle_training_steps
 
             print(f"[PSRO] Oracle info: {oracle_info}")
-            ##################################################
-            if self.log_enabled and iteration % self.log_interval == 0:
-                row = [iteration, self.timestep] + [np.max(self.payoff_matrix[a]) for a in self.agents]
-                writer.writerow(row)
-                log_file.flush()
-            ##################################################
 
             # --------------------------------------------------
             # Add oracle to population
@@ -204,7 +236,7 @@ class PSRO:
             # -------- Checkpointing ---------
             ''''''
             if self.config['logging']['enable_saving'] and \
-                 iteration % self.save_population_interval == 0 and iteration > 0:
+                 iteration+1 % self.save_population_interval == 0 and iteration > 0:
 
                 path = f'checkpoints/{self.config["algorithm"]["name"]}_{self.config["env"]["name"]}_{self.rand_code}'
                 os.makedirs(path, exist_ok=True)
@@ -476,6 +508,18 @@ class PSRO:
             # remove oldest policy (FIFO)
             self.population[agent].pop(0)
             print(f"[PSRO] Pruned population for {agent}. New size: {len(self.population[agent])}")
+
+    def evaluate_with_enemy(self, best_response, episodes=5):
+        mean_rewards = {}
+        self.oracle.policies[self.agents[1]].load_state_dict(self.enemy_checkpoint)
+
+        for i, agent in enumerate(self.agents):
+            defender = best_response[agent]
+            self.oracle.policies[self.agents[0]].load_state_dict(defender)
+            
+            print(f"[PSRO] Evaluating best response of {agent} against enemy.")
+            mean_rewards[agent] = self.oracle.evaluate(episodes=episodes)[self.agents[0]]
+        return mean_rewards
 
     def save(self, path):
         torch.save(self.population, path)

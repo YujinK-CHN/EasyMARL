@@ -1,3 +1,5 @@
+import torch
+import os
 # ==============================================
 # Build Environment
 # ==============================================
@@ -111,4 +113,30 @@ def make_env(config):
         env = env_module.env(**env_kwargs)
 
     return env
+
+def generate_enemy_from_ppo_checkpoint(path, agent_name=None):
+    checkpoint = torch.load(path)
+    if agent_name != None:
+        torch.save(checkpoint['models'][agent_name])
+    else:
+        for a in checkpoint['models'].key():
+            torch.save(checkpoint['models'][a])
+            break
+
+def generate_enemy_from_psro_checkpoint(path, oracle=None, agent_name=None):
+
+    if oracle == None:
+        print('[Tool Warning] You need to specify the oracle algorithm for PSRO.')
+    else:
+        save_dir = f"checkpoints/{oracle}_enemy/"
+        os.makedirs(save_dir, exist_ok=True)
+        checkpoint = torch.load(path)
+        #print(checkpoint[agent_name][0])
+        if agent_name != None:
+            torch.save(checkpoint[agent_name][0], save_dir + 'enemy_agent.pt')
+            print(f'[Tool] enemy save to: {save_dir}')
+        else:
+            for a in checkpoint.keys():
+                torch.save(checkpoint[a][0], save_dir + 'enemy_agent.pt')
+                break
 

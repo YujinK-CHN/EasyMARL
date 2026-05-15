@@ -31,7 +31,7 @@ training:
   value_loss_coef: 0.5
   max_grad_norm: 0.5
 
-  freeze_one_agent: True
+  freeze_one_agent: False
   # For PSRO oracle training, no affected by freeze_one_agent since we manually control which agent to train in PSRO loop
   # For example, boxing env, if freeze_one_agent=True, then PPO will only update agent_0's policy, treating agent_1 as part 
   # of the environment. This can help stabilize training when the opponent is also learning. 
@@ -39,12 +39,20 @@ training:
   #which can lead to non-stationarity and instability in training.
 
 # ==========================================================
+# Enemy
+# ==========================================================
+# works with freeze_one_agent, you can load an enemy for training the learner model.
+existing_enemy:
+  enabled: False # disable if run PSRO, since it have seperated trigger.
+  enemy_dir: ./checkpoints/ppo_enemy/enemy_agent.pt # default for PPO class
+
+# ==========================================================
 # Evaluation
 # ==========================================================
 
 evaluation:
-  enabled: False
-  eval_interval: 10000
+  enabled: False # disable if run PSRO.
+  eval_interval: 50000
   eval_episodes: 5
 
 # ==========================================================
@@ -52,11 +60,11 @@ evaluation:
 # ==========================================================
 
 logging:
-  enabled: False
+  enabled: False # disable if run PSRO.
   log_type: "independent" # "mean" or "max" or "independent"
   log_interval: 4096
-  enable_saving: True # set "False" for PSRO, since PSRO has its own population saving mechanism.
-  save_model_interval: 163840
+  enable_saving: False # set "False" for PSRO, since PSRO has its own population saving mechanism.
+  save_model_interval: 250000
 
 # ==========================================================
 # Device
