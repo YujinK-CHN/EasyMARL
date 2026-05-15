@@ -198,5 +198,8 @@ if __name__ == "__main__":
     base_dir = "results/"  # root folder
     
 
-    column = "episode_reward"  # column to plot
+    column = "reward_first_0"  # column to plot
+    plot_results(base_dir, column, shade="variance")
+
+    column = "reward_second_0"  # column to plot
     plot_results(base_dir, column, shade="variance")
