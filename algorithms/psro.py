@@ -60,8 +60,11 @@ class PSRO:
         self.population = {
             a: [] for a in self.agents
         }
+        self.last_pop_sizes = {
+            agent: 0 for agent in self.agents
+        }
         self.payoff_matrix = None
-        self.prev_meta_strategies = None
+        self.current_meta = None
 
         # load enemy for evaluation only.
         if self.config['psro_existing_enemy']['enabled']:
@@ -159,7 +162,10 @@ class PSRO:
             log_file = open(filename, "w", newline="")
             writer = csv.writer(log_file)
 
-            header = ["iteration"] + ["timestep"] + [f"reward_{a}" for a in self.agents]
+            header = ["iteration"] + ["timestep"] + [f"reward_{a}" for a in self.agents]\
+                                + [f"exploitability_{a}" for a in self.agents]\
+                                + [f"ESS_{a}" for a in self.agents]\
+                                + [f"meta_entropy_{a}" for a in self.agents]
             writer.writerow(header)
 
             if self.config['psro_existing_enemy']['enabled']:
@@ -185,22 +191,22 @@ class PSRO:
             else:
                 print(f"[PSRO] Do NOT support yet!:\n{self.payoff_matrix}")
 
-            ##################################################
-            if self.log_enabled and iteration % self.log_interval == 0:
-                row = [iteration, self.timestep] + [np.max(self.payoff_matrix[a]) for a in self.agents]
-                writer.writerow(row)
-                log_file.flush()
-            ##################################################
-
             # --------------------------------------------------
             # Sample opponents
             # --------------------------------------------------
             for agent in self.agents:
                 print(f"  {agent} population size: {len(self.population[agent])}")
 
-            sampled_response, sampled_idx, current_meta = self.sample_response(payoff_matrix=self.payoff_matrix)
+            self.current_meta = self.compute_meta_strategies(payoff_matrix=self.payoff_matrix)
+            print(f"[PSRO] Meta strategies: {self.current_meta}")
 
-            
+            meta_entropy = self.compute_entropy(current_meta=self.current_meta)
+            print(f"[PSRO] Meta strategy entropy: {meta_entropy}")
+
+            ess = self.compute_effective_population_size(current_meta=self.current_meta)
+            print(f"[PSRO] Number of effective policies: {ess}")
+
+            sampled_response, sampled_idx = self.sample_response(payoff_matrix=self.payoff_matrix)
 
             print(f"[PSRO] Sampled responses: {sampled_idx}")
 
@@ -221,18 +227,35 @@ class PSRO:
             # --------------------------------------------------
             # Train oracle
             # --------------------------------------------------
+            equilibrium_value = self.compute_equilibrium_value(
+                                            payoff_matrix=self.payoff_matrix, 
+                                            meta_strategy=self.current_meta)
+            print(f"[PSRO] Equilibrium value: {equilibrium_value}")
 
-            oracle_info, new_policies = self.train_oracle(sampled_response)
+            br_payoffs, new_policies = self.train_oracle(sampled_response)
+            print(f"[PSRO] Best-response Payoffs: {br_payoffs}")
+
+            exploitability = {
+                agent: br_payoffs[agent] - equilibrium_value[agent]
+                for agent in self.agents
+            }
+            print(f"[PSRO] Exploitability: {exploitability}")
+
+            ##################################################
+            if self.log_enabled and iteration % self.log_interval == 0:
+                row = [iteration, self.timestep] + [np.mean(self.payoff_matrix[a]) for a in self.agents]\
+                    + [exploitability[a] for a in self.agents]\
+                    + [ess[a] for a in self.agents]\
+                    + [meta_entropy[a] for a in self.agents]
+                writer.writerow(row)
+                log_file.flush()
+            ##################################################
             
-            self.timestep += self.oracle_training_steps
-
-            print(f"[PSRO] Oracle info: {oracle_info}")
-
             # --------------------------------------------------
             # Add oracle to population
             # --------------------------------------------------
 
-            improved = self.should_add_oracle(oracle_info, sampled_idx)
+            improved = self.should_add_oracle(br_payoffs, sampled_idx)
 
             self.add_oracle_to_population(improved, new_policies)
 
@@ -250,6 +273,118 @@ class PSRO:
             
             # --------------------------------
 
+            self.timestep += self.oracle_training_steps
+
+    # ==========================================================
+    # Compute equilibrium value
+    # ==========================================================
+    def compute_equilibrium_value(
+        self,
+        payoff_matrix,
+        meta_strategy
+    ):
+        """
+        Compute expected payoff under meta-strategies.
+        """
+
+        A = payoff_matrix[self.agents[0]]
+
+        p = meta_strategy[self.agents[0]]
+        q = meta_strategy[self.agents[1]]
+
+        value = float(p.T @ A @ q)
+
+        return {
+            self.agents[0]: value,
+            self.agents[1]: -value  # zero-sum
+        }
+    
+    # ==========================================================
+    # Performance measures
+    # ==========================================================
+    def compute_entropy(self, current_meta, normalize=True, eps=1e-12):
+        """
+        Compute Shannon entropy of PSRO meta-strategies.
+
+        High entropy:
+            diverse equilibrium
+            many useful strategies
+
+        Low entropy:
+            one dominant strategy
+            Sometimes variants artificially collapse populations.
+
+        Args:
+            current_meta: dict
+                {
+                    agent0: np.array of probabilities,
+                    agent1: np.array of probabilities
+                }
+
+            normalize: bool
+                If True, entropy is normalized to [0, 1].
+
+            eps: float
+                Small constant for numerical stability.
+
+        Returns:
+            dict:
+                {
+                    agent0: entropy,
+                    agent1: entropy
+                }
+        """
+
+        entropy = {}
+
+        for agent in self.agents:
+
+            p = np.asarray(current_meta[agent], dtype=np.float64)
+
+            # numerical safety
+            p = np.clip(p, eps, 1.0)
+            p = p / p.sum()
+
+            # Shannon entropy
+            H = -np.sum(p * np.log(p))
+
+            # optional normalization
+            if normalize and len(p) > 1:
+                H /= np.log(len(p))
+
+            entropy[agent] = float(H)
+
+        return entropy
+    
+    def compute_effective_population_size(
+        self,
+        current_meta,
+        eps=1e-12
+    ):
+        """
+        Effective Sample Size (ESS), sometimes called effective population size in PSRO / MARL, is a way to measure:
+
+        How many truly important strategies are being used, after accounting for the probabilities?
+
+        It is not counting how many policies exist — it measures how many are actually active in the mixture.
+
+        This is also called the inverse Simpson index.
+
+        ESS answers:
+        If I replaced this weighted mixture with a uniform one, how many equally likely strategies would give the same diversity?
+        """
+        ess = {}
+
+        for agent in self.agents:
+
+            p = np.asarray(current_meta[agent], dtype=np.float64)
+
+            p = np.clip(p, eps, 1.0)
+            p = p / p.sum()
+
+            ess[agent] = float(1.0 / np.sum(p ** 2))
+
+        return ess
 
     # ==========================================================
     # Sample Opponents
@@ -286,12 +421,9 @@ class PSRO:
 
             elif self.response_sampling == "meta_strategy":
 
-                current_meta = self.compute_meta_strategies(payoff_matrix=payoff_matrix)
-                print(f"[PSRO] Meta strategies: {current_meta}")
-
                 idx = np.random.choice(
                     np.arange(pop_size),
-                    p=current_meta[agent]
+                    p=self.current_meta[agent]
                 )
 
             else:
@@ -302,11 +434,11 @@ class PSRO:
 
             sampled_idx[agent] = idx
             sampled[agent] = self.population[agent][idx]
-        return sampled, sampled_idx, current_meta
+        return sampled, sampled_idx
 
     def train_oracle(self, sampled_response):
 
-        oracle_info = {}
+        br_payoffs = {}
 
         new_policies = {}
 
@@ -351,17 +483,17 @@ class PSRO:
 
             score = np.mean([ep[self.agents[0]] for ep in episode_stats])
 
-            oracle_info[agent] = score
+            br_payoffs[agent] = score
 
-        return oracle_info, new_policies
+        return br_payoffs, new_policies
     
-    def should_add_oracle(self, oracle_info, sampled_idx):
+    def should_add_oracle(self, br_payoffs, sampled_idx):
 
         improved = {}
 
         for i, agent in enumerate(self.agents):
 
-            new_score = oracle_info[agent]
+            new_score = br_payoffs[agent]
             old_score = self.payoff_matrix[agent][sampled_idx[self.agents[0]]][sampled_idx[self.agents[1]]]
 
             if new_score > old_score:
@@ -392,6 +524,11 @@ class PSRO:
         n0 = len(pop0)
         n1 = len(pop1)
 
+        changed = (
+            n0 != self.last_pop_sizes[self.agents[0]] or
+            n1 != self.last_pop_sizes[self.agents[1]]
+        )
+
         # initialize if first time
         if payoff_matrix is None:
             payoff_matrix = {
@@ -399,7 +536,7 @@ class PSRO:
                 for agent in self.agents
             }
 
-        else:
+        if changed:
             # expand existing matrices
             for agent in self.agents:
                 old = payoff_matrix[agent]
@@ -409,31 +546,75 @@ class PSRO:
 
                 payoff_matrix[agent] = new_matrix
 
-        # evaluate newest policy from pop0 against all pop1
-        i = n0 - 1
-        for j, policy1 in enumerate(pop1):
+        if n0 != self.last_pop_sizes[self.agents[0]] and\
+            n1 != self.last_pop_sizes[self.agents[1]]:
+            # evaluate newest policy from pop0 against all pop1
+            i = n0 - 1
+            for j, policy1 in enumerate(pop1):
 
-            self.oracle.policies[self.agents[0]].load_state_dict(pop0[i])
-            self.oracle.policies[self.agents[1]].load_state_dict(policy1)
+                self.oracle.policies[self.agents[0]].load_state_dict(pop0[i])
+                self.oracle.policies[self.agents[1]].load_state_dict(policy1)
 
-            print(f"[PSRO] Evaluating <P0>: {i} and <P1>: {j}")
-            rewards = self.oracle.evaluate(episodes=episodes)
+                print(f"[PSRO] Evaluating <P0>: {i} and <P1>: {j}")
+                rewards = self.oracle.evaluate(episodes=episodes)
 
-            payoff_matrix[self.agents[0]][i, j] = rewards[self.agents[0]]
-            payoff_matrix[self.agents[1]][i, j] = rewards[self.agents[1]]
+                payoff_matrix[self.agents[0]][i, j] = rewards[self.agents[0]]
+                payoff_matrix[self.agents[1]][i, j] = rewards[self.agents[1]]
+            
+            j = n1 - 1
+            for i, policy0 in enumerate(pop0[:-1]):  # skip duplicate corner eval
 
-        # evaluate all pop0 against newest policy from pop1
-        j = n1 - 1
-        for i, policy0 in enumerate(pop0[:-1]):  # skip duplicate corner eval
+                self.oracle.policies[self.agents[0]].load_state_dict(policy0)
+                self.oracle.policies[self.agents[1]].load_state_dict(pop1[j])
 
-            self.oracle.policies[self.agents[0]].load_state_dict(policy0)
-            self.oracle.policies[self.agents[1]].load_state_dict(pop1[j])
+                print(f"[PSRO] Evaluating <P1>: {j} and <P0>: {i}")
+                rewards = self.oracle.evaluate(episodes=episodes)
 
-            print(f"[PSRO] Evaluating <P1>: {j} and <P0>: {i}")
-            rewards = self.oracle.evaluate(episodes=episodes)
+                payoff_matrix[self.agents[0]][i, j] = rewards[self.agents[0]]
+                payoff_matrix[self.agents[1]][i, j] = rewards[self.agents[1]]
 
-            payoff_matrix[self.agents[0]][i, j] = rewards[self.agents[0]]
-            payoff_matrix[self.agents[1]][i, j] = rewards[self.agents[1]]
+        elif n0 != self.last_pop_sizes[self.agents[0]] and\
+            n1 == self.last_pop_sizes[self.agents[1]]:
+
+            # evaluate newest policy from pop0 against all pop1
+            i = n0 - 1
+            for j, policy1 in enumerate(pop1):
+
+                self.oracle.policies[self.agents[0]].load_state_dict(pop0[i])
+                self.oracle.policies[self.agents[1]].load_state_dict(policy1)
+
+                print(f"[PSRO] Evaluating <P0>: {i} and <P1>: {j}")
+                rewards = self.oracle.evaluate(episodes=episodes)
+
+                payoff_matrix[self.agents[0]][i, j] = rewards[self.agents[0]]
+                payoff_matrix[self.agents[1]][i, j] = rewards[self.agents[1]]
+            
+            
+            print(f'[PSRO] Population {self.agents[1]} unchanged. Skip evaluation.')
+
+        elif n0 == self.last_pop_sizes[self.agents[0]] and\
+            n1 != self.last_pop_sizes[self.agents[1]]:
+
+            print(f'[PSRO] Population {self.agents[0]} unchanged. Skip evaluation.')
+
+            # evaluate all pop0 against newest policy from pop1
+            j = n1 - 1
+            for i, policy0 in enumerate(pop0):  # skip duplicate corner eval
+
+                self.oracle.policies[self.agents[0]].load_state_dict(policy0)
+                self.oracle.policies[self.agents[1]].load_state_dict(pop1[j])
+
+                print(f"[PSRO] Evaluating <P1>: {j} and <P0>: {i}")
+                rewards = self.oracle.evaluate(episodes=episodes)
+
+                payoff_matrix[self.agents[0]][i, j] = rewards[self.agents[0]]
+                payoff_matrix[self.agents[1]][i, j] = rewards[self.agents[1]]
+                
+        else:
+            print(f'[PSRO] Population unchanged. Skip evaluation.')
+
+        self.last_pop_sizes[self.agents[0]] = n0
+        self.last_pop_sizes[self.agents[1]] = n1
 
         return payoff_matrix
     

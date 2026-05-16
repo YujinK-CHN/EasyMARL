@@ -27,13 +27,13 @@ device:
 psro:
 
   # Number of PSRO iterations
-  iterations: 20
+  iterations: 25
 
   # for each oracle training phase
-  oracle_training_steps: 50000
+  oracle_training_steps: 4096
 
   # Population size limit
-  max_population_size: 3
+  max_population_size: 5
 
   # Meta strategy solver: "fictitious_play" or "nash"
   meta_solver: nash
@@ -56,7 +56,7 @@ psro:
 # Only for evaluation, aligning with other baselines like PPO.
 psro_existing_enemy:
 
-  enabled: True
+  enabled: False
 
   enemy_dir: ./checkpoints/ppo_enemy/enemy_agent.pt # default for ppo oracle
 
