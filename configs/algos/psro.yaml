@@ -35,8 +35,8 @@ psro:
   # Population size limit
   max_population_size: 3
 
-  # Meta strategy solver
-  meta_solver: fictitious_play
+  # Meta strategy solver: "fictitious_play" or "nash"
+  meta_solver: nash
 
   # uniform / latest / meta_strategy
   response_sampling: meta_strategy

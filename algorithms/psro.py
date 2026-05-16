@@ -6,10 +6,9 @@ import string
 from run import load_config
 import torch
 import numpy as np
-from collections import defaultdict
-from itertools import product
 from algorithms.ppo import PPO
 from algorithms.qmix import QMIX
+from scipy.optimize import linprog
 
 
 # ==========================================================
@@ -62,6 +61,7 @@ class PSRO:
             a: [] for a in self.agents
         }
         self.payoff_matrix = None
+        self.prev_meta_strategies = None
 
         # load enemy for evaluation only.
         if self.config['psro_existing_enemy']['enabled']:
@@ -174,6 +174,7 @@ class PSRO:
                 eval_writer.writerow(eval_header)
         ###################################################
 
+        tolerance = 1e-3
         for iteration in range(self.iterations):
 
             print(f"\n[PSRO] Iteration {iteration}")
@@ -197,7 +198,9 @@ class PSRO:
             for agent in self.agents:
                 print(f"  {agent} population size: {len(self.population[agent])}")
 
-            sampled_response, sampled_idx = self.sample_response(payoff_matrix=self.payoff_matrix)
+            sampled_response, sampled_idx, current_meta = self.sample_response(payoff_matrix=self.payoff_matrix)
+
+            
 
             print(f"[PSRO] Sampled responses: {sampled_idx}")
 
@@ -235,8 +238,8 @@ class PSRO:
 
             # -------- Checkpointing ---------
             ''''''
-            if self.config['logging']['enable_saving'] and \
-                 iteration+1 % self.save_population_interval == 0 and iteration > 0:
+            if self.config['psro_logging']['enabled'] and \
+                 ((iteration+1) % self.save_population_interval == 0) and iteration > 0:
 
                 path = f'checkpoints/{self.config["algorithm"]["name"]}_{self.config["env"]["name"]}_{self.rand_code}'
                 os.makedirs(path, exist_ok=True)
@@ -283,12 +286,12 @@ class PSRO:
 
             elif self.response_sampling == "meta_strategy":
 
-                meta_strateies = self.compute_meta_strategies(payoff_matrix=payoff_matrix)
-                print(f"[PSRO] Meta strategies: {meta_strateies}")
+                current_meta = self.compute_meta_strategies(payoff_matrix=payoff_matrix)
+                print(f"[PSRO] Meta strategies: {current_meta}")
 
                 idx = np.random.choice(
                     np.arange(pop_size),
-                    p=meta_strateies[agent]
+                    p=current_meta[agent]
                 )
 
             else:
@@ -299,7 +302,7 @@ class PSRO:
 
             sampled_idx[agent] = idx
             sampled[agent] = self.population[agent][idx]
-        return sampled, sampled_idx
+        return sampled, sampled_idx, current_meta
 
     def train_oracle(self, sampled_response):
 
@@ -434,8 +437,15 @@ class PSRO:
 
         return payoff_matrix
     
-
     def compute_meta_strategies(self, payoff_matrix):
+
+        if self.meta_solver == "fictitious_play":
+            return self.compute_fp_meta_strategies(payoff_matrix)
+
+        elif self.meta_solver == "nash":
+            return self.compute_nash_meta_strategies(payoff_matrix)
+
+    def compute_fp_meta_strategies(self, payoff_matrix):
         """
         Compute PSRO meta-strategies (mixed Nash equilibrium approximation)
         from a 2-player payoff matrix.
@@ -497,6 +507,118 @@ class PSRO:
 
             p /= p.sum()
             q /= q.sum()
+
+        return {
+            self.agents[0]: p,
+            self.agents[1]: q
+        }
+    
+    def compute_nash_meta_strategies(self, payoff_matrix):
+        """
+        Solve zero-sum Nash equilibrium for PSRO empirical game.
+
+        Returns:
+            {
+                agent0: mixed strategy over rows,
+                agent1: mixed strategy over cols
+            }
+        """
+
+        A = payoff_matrix[self.agents[0]]
+
+        n_rows, n_cols = A.shape
+
+        # ==========================================================
+        # Solve row player LP
+        #
+        # maximize v
+        # s.t. A^T p >= v
+        #      sum(p)=1
+        #      p>=0
+        #
+        # linprog minimizes, so minimize -v
+        # ==========================================================
+
+        # variables = [p_0 ... p_n, v]
+        c = np.zeros(n_rows + 1)
+        c[-1] = -1.0  # maximize v
+
+        # inequality constraints:
+        # -A^T p + v <= 0
+        A_ub = np.zeros((n_cols, n_rows + 1))
+        A_ub[:, :n_rows] = -A.T
+        A_ub[:, -1] = 1.0
+
+        b_ub = np.zeros(n_cols)
+
+        # equality constraint: sum(p)=1
+        A_eq = np.ones((1, n_rows + 1))
+        A_eq[0, -1] = 0.0
+
+        b_eq = np.array([1.0])
+
+        bounds = [(0, None)] * n_rows + [(None, None)]
+
+        result_row = linprog(
+            c,
+            A_ub=A_ub,
+            b_ub=b_ub,
+            A_eq=A_eq,
+            b_eq=b_eq,
+            bounds=bounds,
+            method="highs"
+        )
+
+        if not result_row.success:
+            raise RuntimeError(
+                f"Row-player LP failed: {result_row.message}"
+            )
+
+        p = result_row.x[:n_rows]
+        p /= p.sum()
+
+        # ==========================================================
+        # Solve column player LP
+        #
+        # minimize v
+        # s.t. A q <= v
+        #      sum(q)=1
+        #      q>=0
+        # ==========================================================
+
+        c = np.zeros(n_cols + 1)
+        c[-1] = 1.0
+
+        A_ub = np.zeros((n_rows, n_cols + 1))
+        A_ub[:, :n_cols] = A
+        A_ub[:, -1] = -1.0
+
+        b_ub = np.zeros(n_rows)
+
+        A_eq = np.ones((1, n_cols + 1))
+        A_eq[0, -1] = 0.0
+
+        b_eq = np.array([1.0])
+
+        bounds = [(0, None)] * n_cols + [(None, None)]
+
+        result_col = linprog(
+            c,
+            A_ub=A_ub,
+            b_ub=b_ub,
+            A_eq=A_eq,
+            b_eq=b_eq,
+            bounds=bounds,
+            method="highs"
+        )
+
+        if not result_col.success:
+            raise RuntimeError(
+                f"Column-player LP failed: {result_col.message}"
+            )
+
+        q = result_col.x[:n_cols]
+        q /= q.sum()
 
         return {
             self.agents[0]: p,

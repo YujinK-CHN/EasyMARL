@@ -195,7 +195,7 @@ all_timesteps = all_timesteps[::2]  # or every 4th point
 
 
 if __name__ == "__main__":
-    base_dir = "results/train"  # root folder
+    base_dir = "results_complete/train"  # root folder
     
 
     column = "reward_first_0"  # column to plot
