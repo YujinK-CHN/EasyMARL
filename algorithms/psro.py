@@ -162,7 +162,7 @@ class PSRO:
             log_file = open(filename, "w", newline="")
             writer = csv.writer(log_file)
 
-            header = ["iteration"] + ["timestep"] + [f"reward_{a}" for a in self.agents]\
+            header = ["iteration"] + ["timestep"] + [f"eq_{a}" for a in self.agents]\
                                 + [f"exploitability_{a}" for a in self.agents]\
                                 + [f"ESS_{a}" for a in self.agents]\
                                 + [f"meta_entropy_{a}" for a in self.agents]
@@ -242,7 +242,7 @@ class PSRO:
 
             ##################################################
             if self.log_enabled and iteration % self.log_interval == 0:
-                row = [iteration, self.timestep] + [np.max(self.payoff_matrix[a]) for a in self.agents]\
+                row = [iteration, self.timestep] + [equilibrium_value[a] for a in self.agents]\
                     + [exploitability[a] for a in self.agents]\
                     + [ess[a] for a in self.agents]\
                     + [meta_entropy[a] for a in self.agents]
@@ -814,11 +814,11 @@ class PSRO:
             # remove oldest policy
             self.population[agent].pop(remove_idx)
 
-            for i, a in enumerate(self.payoff_matrix):
+            for a in self.payoff_matrix:
 
                 matrix = self.payoff_matrix[a]
 
-                if i==0:
+                if agent == self.agents[0]:
 
                     # remove row
                     matrix = np.delete(matrix, remove_idx, axis=0)
@@ -827,7 +827,7 @@ class PSRO:
                     zero_row = np.zeros((1, matrix.shape[1]))
                     matrix = np.vstack([matrix, zero_row])
 
-                elif i==1:
+                else:
 
                     # remove column
                     matrix = np.delete(matrix, remove_idx, axis=1)

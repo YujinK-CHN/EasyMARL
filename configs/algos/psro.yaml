@@ -33,7 +33,7 @@ psro:
   oracle_training_steps: 4097
 
   # Population size limit
-  max_population_size: 1
+  max_population_size: 2
 
   # Meta strategy solver: "fictitious_play" or "nash"
   meta_solver: nash
@@ -80,4 +80,4 @@ psro_evaluation:
   # Save each new oracle
   enabled: True
 
-  eval_episodes: 5
+  eval_episodes: 3
