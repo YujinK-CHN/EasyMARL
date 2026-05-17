@@ -180,7 +180,6 @@ class PSRO:
                 eval_writer.writerow(eval_header)
         ###################################################
 
-        tolerance = 1e-3
         for iteration in range(self.iterations):
 
             print(f"\n[PSRO] Iteration {iteration}")
@@ -243,7 +242,7 @@ class PSRO:
 
             ##################################################
             if self.log_enabled and iteration % self.log_interval == 0:
-                row = [iteration, self.timestep] + [np.mean(self.payoff_matrix[a]) for a in self.agents]\
+                row = [iteration, self.timestep] + [np.max(self.payoff_matrix[a]) for a in self.agents]\
                     + [exploitability[a] for a in self.agents]\
                     + [ess[a] for a in self.agents]\
                     + [meta_entropy[a] for a in self.agents]
@@ -510,8 +509,8 @@ class PSRO:
             if improved[agent]:
 
                 self.population[agent].append(new_policies[agent])
-                self.prune_population(agent)
                 print(f"[PSRO] Added oracle to population for {agent}.")
+                self.prune_population(agent)
 
     def update_payoff_matrix(self, payoff_matrix=None, episodes=5):
         """
@@ -807,10 +806,82 @@ class PSRO:
         }
     
     def prune_population(self, agent):
+
         if len(self.population[agent]) > self.max_population_size:
-            # remove oldest policy (FIFO)
-            self.population[agent].pop(0)
-            print(f"[PSRO] Pruned population for {agent}. New size: {len(self.population[agent])}")
+
+            remove_idx = 0
+
+            # remove oldest policy
+            self.population[agent].pop(remove_idx)
+
+            for i, a in enumerate(self.payoff_matrix):
+
+                matrix = self.payoff_matrix[a]
+
+                if i==0:
+
+                    # remove row
+                    matrix = np.delete(matrix, remove_idx, axis=0)
+
+                    # append zero row to preserve shape
+                    zero_row = np.zeros((1, matrix.shape[1]))
+                    matrix = np.vstack([matrix, zero_row])
+
+                elif i==1:
+
+                    # remove column
+                    matrix = np.delete(matrix, remove_idx, axis=1)
+
+                    # append zero column to preserve shape
+                    zero_col = np.zeros((matrix.shape[0], 1))
+                    matrix = np.hstack([matrix, zero_col])
+
+                self.payoff_matrix[a] = matrix
+
+            print(f"[PSRO] Pruned population for {agent}, new payoff-matrix: {self.payoff_matrix}")
+
+            print(f"[PSRO] Re-evaluating newest policy of {agent}")
+
+            pop0 = self.population[self.agents[0]]
+            pop1 = self.population[self.agents[1]]
+
+            n0 = len(pop0)
+            n1 = len(pop1)
+
+            if agent == self.agents[0]:
+
+                # evaluate newest policy from pop0 against all pop1
+                i = n0 - 1
+                for j, policy1 in enumerate(pop1):
+
+                    self.oracle.policies[self.agents[0]].load_state_dict(pop0[i])
+                    self.oracle.policies[self.agents[1]].load_state_dict(policy1)
+
+                    print(f"[PSRO] Evaluating <P0>: {i} and <P1>: {j}")
+                    rewards = self.oracle.evaluate(episodes=self.eval_episodes)
+
+                    self.payoff_matrix[self.agents[0]][i, j] = rewards[self.agents[0]]
+                    self.payoff_matrix[self.agents[1]][i, j] = rewards[self.agents[1]]
+                
+                print(f'[PSRO] Payoff matrix of {agent} updated.')
+
+            else:
+
+                # evaluate all pop0 against newest policy from pop1
+                j = n1 - 1
+                for i, policy0 in enumerate(pop0):  # skip duplicate corner eval
+
+                    self.oracle.policies[self.agents[0]].load_state_dict(policy0)
+                    self.oracle.policies[self.agents[1]].load_state_dict(pop1[j])
+
+                    print(f"[PSRO] Evaluating <P1>: {j} and <P0>: {i}")
+                    rewards = self.oracle.evaluate(episodes=self.eval_episodes)
+
+                    self.payoff_matrix[self.agents[0]][i, j] = rewards[self.agents[0]]
+                    self.payoff_matrix[self.agents[1]][i, j] = rewards[self.agents[1]]
+
+                print(f'[PSRO] Payoff matrix of {agent} updated.')
+
 
     def evaluate_with_enemy(self, best_response, episodes=5):
         mean_rewards = {}
